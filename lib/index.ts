@@ -44,6 +44,10 @@ export type { Erc4337BundlerProviderConfig } from "./client/BundlerProvider";
 export { BundlerError } from "./client/types";
 export type { BundlerProvider, BundlerErrorCode, UserOpStatus, UserOpReceipt } from "./client/types";
 
+// Error model (ZkapAaError hierarchy + 카탈로그 + 팩토리)
+export * from "./errors";
+export { safeStringify } from "./utils/safeStringify";
+
 // Pimlico format (for external bundler integration)
 export type { PimlicoUserOperation, PimlicoGasEstimate } from "./types/UserOperation";
 
