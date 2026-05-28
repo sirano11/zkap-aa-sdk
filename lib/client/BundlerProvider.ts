@@ -1,27 +1,13 @@
 import type { PackedUserOperation, PimlicoUserOperation, PimlicoGasEstimate } from "../types/UserOperation";
 import type { BundlerProvider, UserOpReceipt, UserOpStatus } from "./types";
-import { BundlerError } from "./types";
+import { AaFetchError, AaFetchErrorCode } from "../errors";
+import { classifyBundlerError, makeFetchTransportError } from "./bundlerErrorWrapper";
+import { decodeRevertReason, type EventLog } from "./revertDecoder";
 import { toPimlicoFormat } from "../utils/userOpUtils";
+import { safeStringify } from "../utils/safeStringify";
 
-// ---------------------------------------------------------------------------
-// Helper: classify bundler error codes from error messages
-// ---------------------------------------------------------------------------
-function classifyBundlerError(message: string): BundlerError {
-  const lower = message.toLowerCase();
-  if (lower.includes("aa21")) {
-    return new BundlerError(message, "AA21_INSUFFICIENT_FUNDS", false);
-  }
-  if (lower.includes("aa25")) {
-    return new BundlerError(message, "AA25_NONCE_ERROR", false);
-  }
-  if (lower.includes("aa40") || lower.includes("aa41") || lower.includes("aa31") || lower.includes("aa32")) {
-    return new BundlerError(message, "AA40_PAYMASTER_ERROR", false);
-  }
-  if (lower.includes("network") || lower.includes("fetch") || lower.includes("econnrefused")) {
-    return new BundlerError(message, "NETWORK_ERROR", true);
-  }
-  return new BundlerError(message, "BUNDLER_REJECTED", false);
-}
+/** JSON-RPC 2.0 error envelope (the `error` member of a response). */
+type RpcError = { message?: string; data?: unknown; code?: number };
 
 /**
  * Normalize hex string to even length for ethers.js compatibility.
@@ -67,11 +53,12 @@ export class ZkapBundlerProvider implements BundlerProvider {
    * @param userOp - The fully constructed and signed packed UserOperation.
    * @param _entryPoint - Unused by this provider; the ZKAP server resolves the EntryPoint internally.
    * @returns The UserOperation hash assigned by the bundler.
-   * @throws {@link BundlerError} on network failure or if the bundler rejects the operation.
+   * @throws {@link UserOpRevertError} if the chain rejects the UserOp, or {@link AaFetchError} on a channel failure.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async submitUserOp(userOp: PackedUserOperation, _entryPoint: string): Promise<string> {
     const url = `${this.baseUrl}/api/v1/bundler/submit-direct`;
+    const op: string = "submit_user_op";
     let res: Response;
     try {
       res = await fetch(url, {
@@ -80,21 +67,35 @@ export class ZkapBundlerProvider implements BundlerProvider {
         body: JSON.stringify({ userOp }),
       });
     } catch (err) {
-      throw new BundlerError(
-        `Network error submitting UserOp: ${err instanceof Error ? err.message : String(err)}`,
-        "NETWORK_ERROR",
-        true
-      );
+      throw makeFetchTransportError(err, { service: "bundler", url, method: "POST", operation: op });
     }
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      throw classifyBundlerError(`Bundler rejected UserOp (${res.status}): ${body}`);
+      // Classify: an AA prefix / revert in the body → UserOpRevertError; otherwise a
+      // channel-level AaFetchError. Raw body preserved either way.
+      throw classifyBundlerError({
+        text: body,
+        httpStatus: res.status,
+        raw: body,
+        operation: op,
+        service: "bundler",
+        url,
+        method: "POST",
+      });
     }
 
     const data = await res.json();
     if (!data.userOpHash) {
-      throw new BundlerError("Bundler response missing userOpHash", "BUNDLER_REJECTED", false);
+      throw new AaFetchError({
+        code: AaFetchErrorCode.RESPONSE_SHAPE,
+        message: "Bundler response missing userOpHash",
+        service: "bundler",
+        url,
+        method: "POST",
+        operation: op,
+        rawResponse: safeStringify(data),
+      });
     }
     return data.userOpHash as string;
   }
@@ -104,19 +105,16 @@ export class ZkapBundlerProvider implements BundlerProvider {
    *
    * @param userOpHash - The hash returned by {@link submitUserOp}.
    * @returns The current {@link UserOpStatus}.
-   * @throws {@link BundlerError} on network failure.
+   * @throws {@link AaFetchError} on a transport or HTTP failure.
    */
   async getStatus(userOpHash: string): Promise<UserOpStatus> {
     const url = `${this.baseUrl}/api/v1/bundler/status/${userOpHash}`;
+    const op: string = "get_status";
     let res: Response;
     try {
       res = await fetch(url);
     } catch (err) {
-      throw new BundlerError(
-        `Network error fetching status: ${err instanceof Error ? err.message : String(err)}`,
-        "NETWORK_ERROR",
-        true
-      );
+      throw makeFetchTransportError(err, { service: "bundler", url, method: "GET", operation: op });
     }
 
     if (res.status === 404) {
@@ -124,7 +122,16 @@ export class ZkapBundlerProvider implements BundlerProvider {
     }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      throw new BundlerError(`Status fetch failed (${res.status}): ${body}`, "NETWORK_ERROR", true);
+      throw new AaFetchError({
+        code: AaFetchErrorCode.HTTP_STATUS,
+        httpStatus: res.status,
+        message: `Status fetch failed (${res.status})`,
+        service: "bundler",
+        url,
+        method: "GET",
+        operation: op,
+        rawResponse: body,
+      });
     }
 
     const data = await res.json();
@@ -160,6 +167,12 @@ export class ZkapBundlerProvider implements BundlerProvider {
     const isFailed = status === "failed" || status === "reverted";
     if (!isSuccess && !isFailed) return null;
 
+    // On failure, surface the execution-revert reason if the server provides one.
+    // REST has no event logs — the reason (if any) is a top-level field.
+    const revert = isSuccess
+      ? {}
+      : decodeRevertReason([], (data.revertReason as string) ?? (data.reason as string));
+
     return {
       userOpHash,
       txHash: (data.bundleHash as string) || (data.txHash as string) || "",
@@ -167,6 +180,7 @@ export class ZkapBundlerProvider implements BundlerProvider {
       success: isSuccess,
       actualGasCost: String(data.actualGasCost || "0"),
       actualGasUsed: String(data.actualGasUsed || "0"),
+      ...revert,
     };
   }
 }
@@ -224,29 +238,49 @@ export class Erc4337BundlerProvider implements BundlerProvider {
     this.usePimlicoFormat = config.usePimlicoFormat ?? false;
   }
 
-  private async rpcCall(method: string, params: unknown[]): Promise<unknown> {
+  /**
+   * Pure JSON-RPC transport: sends the request and returns the parsed envelope.
+   * Knows nothing about the error model or the calling operation — only `fetch`
+   * itself failing throws here (raw). Error translation is the caller's job
+   * ({@link request}).
+   */
+  private async rpcCall(method: string, params: unknown[]): Promise<{ result?: unknown; error?: RpcError }> {
     const id = ++this.reqId;
-    let res: Response;
+    const res = await fetch(this.rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+    });
+    return res.json();
+  }
+
+  /**
+   * Calls {@link rpcCall} and translates any failure into the error model, tagged
+   * with `operation`. Transport throw → AaFetchError (TRANSPORT/TIMEOUT). A JSON-RPC
+   * `error` → classifyBundlerError (AA prefix / revert data → UserOpRevertError;
+   * otherwise channel AaFetchError). Raw preserved either way.
+   */
+  private async request(operation: string, method: string, params: unknown[]): Promise<unknown> {
+    let envelope: { result?: unknown; error?: RpcError };
     try {
-      res = await fetch(this.rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-      });
+      envelope = await this.rpcCall(method, params);
     } catch (err) {
-      throw new BundlerError(
-        `Network error calling ${method}: ${err instanceof Error ? err.message : String(err)}`,
-        "NETWORK_ERROR",
-        true
-      );
+      throw makeFetchTransportError(err, { service: "bundler", url: this.rpcUrl, method: "POST", operation });
     }
 
-    const json = await res.json();
-    if (json.error) {
-      const msg = json.error.message || JSON.stringify(json.error);
-      throw classifyBundlerError(msg);
+    if (envelope.error) {
+      const e = envelope.error;
+      throw classifyBundlerError({
+        text: typeof e.message === "string" ? e.message : safeStringify(e),
+        data: e.data,
+        raw: safeStringify(e),
+        operation,
+        service: "bundler",
+        url: this.rpcUrl,
+        method: "POST",
+      });
     }
-    return json.result;
+    return envelope.result;
   }
 
   /**
@@ -259,7 +293,7 @@ export class Erc4337BundlerProvider implements BundlerProvider {
    * @param userOp - The fully constructed and signed packed UserOperation.
    * @param entryPoint - Address of the ERC-4337 EntryPoint contract.
    * @returns The UserOperation hash assigned by the bundler.
-   * @throws {@link BundlerError} if the bundler rejects the operation or a network error occurs.
+   * @throws {@link UserOpRevertError} if the chain rejects the UserOp, or {@link AaFetchError} on a channel failure.
    */
   async submitUserOp(userOp: PackedUserOperation, entryPoint: string): Promise<string> {
     // Convert to Pimlico format if enabled
@@ -267,7 +301,7 @@ export class Erc4337BundlerProvider implements BundlerProvider {
       ? toPimlicoFormat(userOp)
       : userOp;
 
-    const result = await this.rpcCall("eth_sendUserOperation", [opToSend, entryPoint]);
+    const result = await this.request("submit_user_op", "eth_sendUserOperation", [opToSend, entryPoint]);
     return result as string;
   }
 
@@ -277,10 +311,10 @@ export class Erc4337BundlerProvider implements BundlerProvider {
    * @param userOpHash - The hash returned by {@link submitUserOp}.
    * @returns `"included"` if the receipt indicates success, `"failed"` if reverted,
    *   or `"not_found"` if the bundler has no record yet.
-   * @throws {@link BundlerError} on network failure.
+   * @throws {@link AaFetchError} on a transport or HTTP failure.
    */
   async getStatus(userOpHash: string): Promise<UserOpStatus> {
-    const receipt = await this.rpcCall("eth_getUserOperationReceipt", [userOpHash]) as UserOpReceipt | null;
+    const receipt = await this.request("get_status", "eth_getUserOperationReceipt", [userOpHash]) as UserOpReceipt | null;
     if (!receipt) return "not_found";
     if (receipt.success) return "included";
     return "failed";
@@ -291,10 +325,10 @@ export class Erc4337BundlerProvider implements BundlerProvider {
    *
    * @param userOpHash - The hash returned by {@link submitUserOp}.
    * @returns The normalized {@link UserOpReceipt}, or `null` if not yet available.
-   * @throws {@link BundlerError} on network failure.
+   * @throws {@link AaFetchError} on a transport or HTTP failure.
    */
   async getReceipt(userOpHash: string): Promise<UserOpReceipt | null> {
-    const raw = await this.rpcCall("eth_getUserOperationReceipt", [userOpHash]) as Record<string, unknown> | null;
+    const raw = await this.request("get_receipt", "eth_getUserOperationReceipt", [userOpHash]) as Record<string, unknown> | null;
     if (!raw) return null;
 
     // ERC-4337 spec nests the standard EVM TransactionReceipt under `receipt`,
@@ -305,6 +339,15 @@ export class Erc4337BundlerProvider implements BundlerProvider {
       ? (raw.receipt as Record<string, unknown>)
       : {};
 
+    const success = Boolean(raw.success);
+    // On revert, pull the reason from the EntryPoint UserOperationRevertReason event
+    // in the receipt logs (a top-level `reason`, if a bundler exposes one, wins).
+    let revert = {};
+    if (!success) {
+      const logs = (Array.isArray(raw.logs) ? raw.logs : Array.isArray(nested.logs) ? nested.logs : []) as EventLog[];
+      revert = decodeRevertReason(logs, raw.reason as string | undefined);
+    }
+
     return {
       userOpHash,
       txHash:
@@ -313,9 +356,10 @@ export class Erc4337BundlerProvider implements BundlerProvider {
         (raw.txHash as string) ||
         "",
       blockNumber: Number(nested.blockNumber ?? raw.blockNumber ?? 0),
-      success: Boolean(raw.success),
+      success,
       actualGasCost: String(raw.actualGasCost || "0"),
       actualGasUsed: String(raw.actualGasUsed || "0"),
+      ...revert,
     };
   }
 
@@ -332,7 +376,7 @@ export class Erc4337BundlerProvider implements BundlerProvider {
    * @param userOp - The packed UserOperation to estimate gas for. Should have dummy signature set.
    * @param entryPoint - Address of the ERC-4337 EntryPoint contract.
    * @returns Gas estimates from the bundler.
-   * @throws {@link BundlerError} if the bundler rejects the estimation or a network error occurs.
+   * @throws {@link UserOpRevertError} if estimation predicts a revert, or {@link AaFetchError} on a channel failure.
    *
    * @example
    * ```ts
@@ -356,7 +400,7 @@ export class Erc4337BundlerProvider implements BundlerProvider {
       ? toPimlicoFormat(userOp)
       : userOp;
 
-    const result = await this.rpcCall("eth_estimateUserOperationGas", [opToSend, entryPoint]) as Record<string, string>;
+    const result = await this.request("estimate_user_op_gas", "eth_estimateUserOperationGas", [opToSend, entryPoint]) as Record<string, string>;
     return {
       preVerificationGas: normalizeHex(result.preVerificationGas),
       verificationGasLimit: normalizeHex(result.verificationGasLimit),

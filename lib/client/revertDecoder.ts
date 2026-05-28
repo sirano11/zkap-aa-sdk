@@ -1,7 +1,7 @@
 import { ethers } from "ethers";
 
 import { EntryPointABI, ZkapAccountABI, ZkapPaymasterABI } from "../types/abi";
-import { AaOperationError, AaOperationErrorCode, type RevertInfo } from "../errors";
+import { AaOperationError, AaOperationErrorCode, type DecodedContractError, type RevertInfo } from "../errors";
 
 /**
  * Decodes revert bytes into a contract custom-error name + args.
@@ -20,6 +20,9 @@ const errorInterface = new ethers.Interface(
     (f: { type?: string }) => f.type === "error",
   ),
 );
+
+/** EntryPoint interface for event-log parsing (UserOperationRevertReason). */
+const entryPointInterface = new ethers.Interface(EntryPointABI);
 
 /**
  * Make decoded error args JSON-safe. ethers returns `bigint` for uint args, which
@@ -82,5 +85,55 @@ export function decodeContractError(data: string): RevertInfo {
     contractError: { name: outer.name, args: jsonSafeArgs(outer.args) },
     selector,
     rawRevertData: data,
+  };
+}
+
+/** EVM log shape (topics + data) carried on a UserOp receipt. */
+export type EventLog = { topics: ReadonlyArray<string>; data: string };
+
+/** The revert fields carried on a `UserOpReceipt` when an op reverted on-chain. */
+export interface ReceiptRevert {
+  revertReason?: string;
+  contractError?: DecodedContractError;
+  revertSelector?: string;
+}
+
+/**
+ * Builds the `UserOpReceipt` revert fields from a mined receipt. The reason is taken
+ * from the EntryPoint `UserOperationRevertReason` event in `logs` (a top-level
+ * `reason`, when a bundler exposes one, wins), then decoded. No reason present — a
+ * success, or a receipt missing the event — yields `{}`.
+ *
+ * A hex reason with a full selector is decoded (`contractError` + `revertSelector`);
+ * an undecodable selector keeps the raw bytes + selector; a non-hex reason (some
+ * bundlers return a plain string) is preserved as `revertReason` only.
+ */
+export function decodeRevertReason(
+  logs: ReadonlyArray<EventLog>,
+  topLevelReason?: string,
+): ReceiptRevert {
+  let reason =
+    typeof topLevelReason === "string" && topLevelReason !== "0x" ? topLevelReason : undefined;
+  if (reason === undefined) {
+    for (const log of logs) {
+      try {
+        const parsed = entryPointInterface.parseLog({ topics: [...log.topics], data: log.data });
+        if (parsed && parsed.name === "UserOperationRevertReason") {
+          reason = parsed.args.revertReason as string;
+          break;
+        }
+      } catch {
+        // not an EntryPoint event — skip
+      }
+    }
+  }
+  if (reason === undefined || reason === "0x") return {};
+  // A non-hex / selector-less reason (some bundlers return a plain string) is kept
+  // as-is; only decode when it is hex with a full selector.
+  if (!ethers.isHexString(reason) || reason.length < 10) return { revertReason: reason };
+  return {
+    revertReason: reason,
+    contractError: decodeContractError(reason).contractError,
+    revertSelector: reason.slice(0, 10),
   };
 }

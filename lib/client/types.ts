@@ -1,4 +1,5 @@
 import type { PackedUserOperation } from "../types/UserOperation";
+import type { DecodedContractError } from "../errors";
 
 export type { PackedUserOperation };
 
@@ -32,6 +33,21 @@ export interface UserOpReceipt {
   actualGasCost: string;
   /** Actual gas units consumed during execution (as a decimal string). */
   actualGasUsed: string;
+  /**
+   * Raw execution-revert reason, present only when `success` is `false`. Extracted
+   * from the EntryPoint `UserOperationRevertReason` log (hex bytes) or a bundler's
+   * top-level reason. Unlike a validation rejection (thrown as `UserOpRevertError`),
+   * an execution revert is mined on-chain and surfaced here, not thrown.
+   */
+  revertReason?: string;
+  /**
+   * The decoded contract custom error, best-effort, when `revertReason` decodes
+   * against the SDK ABIs (EntryPoint / ZkapAccount / ZkapPaymaster) or standard
+   * `Error(string)` / `Panic`. Undefined for selectors the SDK does not know.
+   */
+  contractError?: DecodedContractError;
+  /** 4-byte selector of the revert, preserved even when the error is not decodable. */
+  revertSelector?: string;
 }
 
 /**

@@ -1,10 +1,28 @@
 /**
- * Tests for BundlerClient, BundlerProvider, BundlerError, and classifyBundlerError
+ * Tests for BundlerClient, BundlerProvider, and the error model the providers throw
+ * (UserOpRevertError / AaFetchError via the bundlerErrorWrapper helpers).
  */
+
+import { ethers } from 'ethers';
 
 import { BundlerClient } from '../BundlerClient';
 import { ZkapBundlerProvider, Erc4337BundlerProvider } from '../BundlerProvider';
 import { BundlerError } from '../types';
+import { AaCode, AaFetchError, AaFetchErrorCode, UserOpRevertError } from '../../errors';
+import { EntryPointABI } from '../../types/abi';
+import revertReceipts from './fixtures/revert-receipts.json';
+
+// Real Base Sepolia reverted-UserOp receipts (4). The decode primitive is unit-tested
+// on the captured bytes in revertDecoder.test.ts; here we run the full on-chain path
+// (receipt logs → decodeRevertReason) through the provider.
+type RealRevertFixture = {
+  txHash: string;
+  note: string;
+  revertReason: string;
+  expect: { name: string; args: unknown[] } | null;
+  logs: { topics: string[]; data: string }[];
+};
+const realRevertFixtures = revertReceipts as RealRevertFixture[];
 import type { BundlerProvider, UserOpReceipt, UserOpStatus } from '../types';
 import type { PackedUserOperation } from '../../types/UserOperation';
 
@@ -301,15 +319,15 @@ describe('ZkapBundlerProvider', () => {
       );
     });
 
-    it('throws BundlerError with NETWORK_ERROR on fetch failure', async () => {
+    it('throws AaFetchError (TRANSPORT) on fetch failure', async () => {
       mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
 
       const provider = new ZkapBundlerProvider();
       await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-        .rejects.toMatchObject({ code: 'NETWORK_ERROR', retryable: true });
+        .rejects.toMatchObject({ code: AaFetchErrorCode.TRANSPORT, service: 'bundler' });
     });
 
-    it('throws classified BundlerError on non-ok response', async () => {
+    it('classifies an AA prefix in the error body as UserOpRevertError', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 400,
@@ -317,11 +335,13 @@ describe('ZkapBundlerProvider', () => {
       });
 
       const provider = new ZkapBundlerProvider();
-      await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-        .rejects.toThrow(BundlerError);
+      const err = await provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT).catch((e) => e);
+      expect(err).toBeInstanceOf(UserOpRevertError);
+      expect(err.code).toBe(AaCode.AA21_INSUFFICIENT_PREFUND);
+      expect(err.rawBundlerError).toContain('AA21'); // raw preserved
     });
 
-    it('throws BUNDLER_REJECTED when response missing userOpHash', async () => {
+    it('throws AaFetchError (RESPONSE_SHAPE) when response is missing userOpHash', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({}),
@@ -329,7 +349,7 @@ describe('ZkapBundlerProvider', () => {
 
       const provider = new ZkapBundlerProvider();
       await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-        .rejects.toMatchObject({ code: 'BUNDLER_REJECTED' });
+        .rejects.toMatchObject({ code: AaFetchErrorCode.RESPONSE_SHAPE });
     });
   });
 
@@ -389,14 +409,14 @@ describe('ZkapBundlerProvider', () => {
       expect(await provider.getStatus(MOCK_USER_OP_HASH)).toBe('not_found');
     });
 
-    it('throws NETWORK_ERROR on fetch failure', async () => {
+    it('throws AaFetchError (TRANSPORT) on fetch failure', async () => {
       mockFetch.mockRejectedValueOnce(new Error('Connection refused'));
       const provider = new ZkapBundlerProvider();
       await expect(provider.getStatus(MOCK_USER_OP_HASH))
-        .rejects.toMatchObject({ code: 'NETWORK_ERROR', retryable: true });
+        .rejects.toMatchObject({ code: AaFetchErrorCode.TRANSPORT, service: 'bundler' });
     });
 
-    it('throws NETWORK_ERROR on non-ok non-404 response', async () => {
+    it('throws AaFetchError (HTTP_STATUS) on non-ok non-404 response', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 500,
@@ -404,7 +424,7 @@ describe('ZkapBundlerProvider', () => {
       });
       const provider = new ZkapBundlerProvider();
       await expect(provider.getStatus(MOCK_USER_OP_HASH))
-        .rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+        .rejects.toMatchObject({ code: AaFetchErrorCode.HTTP_STATUS, httpStatus: 500 });
     });
   });
 
@@ -491,7 +511,7 @@ describe('Erc4337BundlerProvider', () => {
       expect(callBody.jsonrpc).toBe('2.0');
     });
 
-    it('throws classified BundlerError when JSON-RPC returns error', async () => {
+    it('classifies an AA prefix in the JSON-RPC error as UserOpRevertError', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({
@@ -502,16 +522,18 @@ describe('Erc4337BundlerProvider', () => {
       });
 
       const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
-      await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-        .rejects.toMatchObject({ code: 'AA21_INSUFFICIENT_FUNDS', retryable: false });
+      const err = await provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT).catch((e) => e);
+      expect(err).toBeInstanceOf(UserOpRevertError);
+      expect(err.code).toBe(AaCode.AA21_INSUFFICIENT_PREFUND);
+      expect(err.operation).toBe('submit_user_op');
     });
 
-    it('throws NETWORK_ERROR on fetch failure', async () => {
+    it('throws AaFetchError (TRANSPORT) on fetch failure', async () => {
       mockFetch.mockRejectedValueOnce(new Error('connection refused'));
 
       const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
       await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-        .rejects.toMatchObject({ code: 'NETWORK_ERROR', retryable: true });
+        .rejects.toMatchObject({ code: AaFetchErrorCode.TRANSPORT, service: 'bundler' });
     });
   });
 
@@ -706,96 +728,51 @@ describe('Erc4337BundlerProvider', () => {
 });
 
 // ---------------------------------------------------------------------------
-// classifyBundlerError (tested via ZkapBundlerProvider/Erc4337BundlerProvider behaviour)
+// Provider → bundlerErrorWrapper integration. The exhaustive prefix/revert matrix
+// lives in bundlerErrorWrapper.test.ts; here we only assert the provider routes a
+// JSON-RPC error through classifyBundlerError and surfaces the right class.
 // ---------------------------------------------------------------------------
 
-describe('classifyBundlerError (via Erc4337BundlerProvider)', () => {
+describe('JSON-RPC error classification (via Erc4337BundlerProvider)', () => {
   beforeEach(() => {
     mockFetch.mockReset();
   });
 
-  function makeRpcError(message: string) {
+  function makeRpcError(error: unknown) {
     return mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: () => Promise.resolve({ error: { message } }),
+      json: () => Promise.resolve({ error }),
     });
   }
 
-  it('classifies AA21 (case-insensitive) as AA21_INSUFFICIENT_FUNDS, not retryable', async () => {
-    makeRpcError('AA21: insufficient funds for gas * price + value');
+  it('routes an AA validation prefix to UserOpRevertError with phase', async () => {
+    makeRpcError({ message: 'AA31 paymaster deposit too low' });
     const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
-    await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'AA21_INSUFFICIENT_FUNDS', retryable: false });
+    const err = await provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT).catch((e) => e);
+    expect(err).toBeInstanceOf(UserOpRevertError);
+    expect(err.code).toBe(AaCode.AA31_PAYMASTER_DEPOSIT_TOO_LOW);
+    expect(err.phase).toBe('paymaster_validation');
   });
 
-  it('classifies AA21 uppercase as AA21_INSUFFICIENT_FUNDS', async () => {
-    makeRpcError('AA21 insufficient funds');
+  it('routes a non-AA RPC rejection to AaFetchError (RESPONSE_SHAPE)', async () => {
+    makeRpcError({ message: 'some unknown bundler rejection' });
     const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
-    await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'AA21_INSUFFICIENT_FUNDS' });
+    const err = await provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT).catch((e) => e);
+    expect(err).toBeInstanceOf(AaFetchError);
+    expect(err.code).toBe(AaFetchErrorCode.RESPONSE_SHAPE);
   });
 
-  it('classifies AA25 as AA25_NONCE_ERROR, not retryable', async () => {
-    makeRpcError('AA25 invalid account nonce');
+  it('routes revert bytes in error.data (no AA prefix) to an execution-phase revert', async () => {
+    // Error("execution reverted") encoded — no AA prefix, carries revert data.
+    makeRpcError({
+      message: 'execution reverted',
+      data: '0x08c379a0' + '0'.repeat(120),
+    });
     const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
-    await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'AA25_NONCE_ERROR', retryable: false });
-  });
-
-  it('classifies AA40 as AA40_PAYMASTER_ERROR', async () => {
-    makeRpcError('AA40 over verification gas limit');
-    const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
-    await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'AA40_PAYMASTER_ERROR', retryable: false });
-  });
-
-  it('classifies AA41 as AA40_PAYMASTER_ERROR', async () => {
-    makeRpcError('AA41 too little verification gas');
-    const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
-    await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'AA40_PAYMASTER_ERROR' });
-  });
-
-  it('classifies network errors as NETWORK_ERROR, retryable', async () => {
-    makeRpcError('network error: connection refused');
-    const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
-    await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'NETWORK_ERROR', retryable: true });
-  });
-
-  it('classifies fetch errors as NETWORK_ERROR, retryable', async () => {
-    makeRpcError('fetch failed: connection reset');
-    const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
-    await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'NETWORK_ERROR', retryable: true });
-  });
-
-  it('classifies AA31 as AA40_PAYMASTER_ERROR', async () => {
-    makeRpcError('AA31 paymaster deposit too low');
-    const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
-    await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'AA40_PAYMASTER_ERROR' });
-  });
-
-  it('classifies AA32 as AA40_PAYMASTER_ERROR', async () => {
-    makeRpcError('AA32 paymaster expired or not due');
-    const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
-    await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'AA40_PAYMASTER_ERROR' });
-  });
-
-  it('classifies econnrefused as NETWORK_ERROR', async () => {
-    makeRpcError('ECONNREFUSED connection refused');
-    const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
-    await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'NETWORK_ERROR', retryable: true });
-  });
-
-  it('classifies unknown errors as BUNDLER_REJECTED, not retryable', async () => {
-    makeRpcError('some unknown bundler rejection');
-    const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
-    await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'BUNDLER_REJECTED', retryable: false });
+    const err = await provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT).catch((e) => e);
+    expect(err).toBeInstanceOf(UserOpRevertError);
+    expect(err.code).toBe(AaCode.UNKNOWN);
+    expect(err.phase).toBe('execution');
   });
 });
 
@@ -970,7 +947,7 @@ describe('Erc4337BundlerProvider with usePimlicoFormat', () => {
     expect(hash).toBe(MOCK_USER_OP_HASH);
   });
 
-  it('throws classified BundlerError on RPC error when usePimlicoFormat=true', async () => {
+  it('classifies an AA prefix to UserOpRevertError on RPC error when usePimlicoFormat=true', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({
@@ -986,10 +963,10 @@ describe('Erc4337BundlerProvider with usePimlicoFormat', () => {
     });
 
     await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'AA21_INSUFFICIENT_FUNDS', retryable: false });
+      .rejects.toMatchObject({ code: AaCode.AA21_INSUFFICIENT_PREFUND });
   });
 
-  it('throws NETWORK_ERROR on fetch failure when usePimlicoFormat=true', async () => {
+  it('throws AaFetchError (TRANSPORT) on fetch failure when usePimlicoFormat=true', async () => {
     mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
 
     const provider = new Erc4337BundlerProvider({
@@ -998,7 +975,7 @@ describe('Erc4337BundlerProvider with usePimlicoFormat', () => {
     });
 
     await expect(provider.submitUserOp(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'NETWORK_ERROR', retryable: true });
+      .rejects.toMatchObject({ code: AaFetchErrorCode.TRANSPORT });
   });
 });
 
@@ -1146,7 +1123,7 @@ describe('Erc4337BundlerProvider.estimateUserOpGas', () => {
     expect(estimate.paymasterPostOpGasLimit).toBeUndefined();
   });
 
-  it('throws classified BundlerError when JSON-RPC returns error', async () => {
+  it('classifies a predicted revert as UserOpRevertError tagged operation=estimate_user_op_gas', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({
@@ -1158,16 +1135,124 @@ describe('Erc4337BundlerProvider.estimateUserOpGas', () => {
 
     const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
 
-    await expect(provider.estimateUserOpGas(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'AA21_INSUFFICIENT_FUNDS' });
+    const err = await provider.estimateUserOpGas(makePackedUserOp(), MOCK_ENTRY_POINT).catch((e) => e);
+    expect(err).toBeInstanceOf(UserOpRevertError);
+    expect(err.code).toBe(AaCode.AA21_INSUFFICIENT_PREFUND);
+    // The base operation is what distinguishes a predicted (estimate) revert from a submit rejection.
+    expect(err.operation).toBe('estimate_user_op_gas');
   });
 
-  it('throws NETWORK_ERROR on fetch failure', async () => {
+  it('throws AaFetchError (TRANSPORT) on fetch failure', async () => {
     mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
 
     const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
 
     await expect(provider.estimateUserOpGas(makePackedUserOp(), MOCK_ENTRY_POINT))
-      .rejects.toMatchObject({ code: 'NETWORK_ERROR', retryable: true });
+      .rejects.toMatchObject({ code: AaFetchErrorCode.TRANSPORT });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getReceipt execution-revert extraction (Erc4337). An execution revert is mined,
+// so it is surfaced on the receipt (success:false + revert fields), not thrown.
+// Logs are encoded from the real EntryPoint ABI (deterministic selectors).
+// ---------------------------------------------------------------------------
+describe('Erc4337BundlerProvider.getReceipt — execution-revert extraction', () => {
+  const epIface = new ethers.Interface(EntryPointABI);
+
+  beforeEach(() => mockFetch.mockReset());
+
+  // Encodes a real UserOperationRevertReason event log carrying `reasonBytes`.
+  function revertLog(reasonBytes: string) {
+    const { topics, data } = epIface.encodeEventLog('UserOperationRevertReason', [
+      MOCK_USER_OP_HASH,
+      '0x' + '11'.repeat(20),
+      0n,
+      reasonBytes,
+    ]);
+    return { topics, data };
+  }
+
+  function mockReceipt(raw: Record<string, unknown>) {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ result: raw }) });
+  }
+
+  it('leaves revert fields unset on success', async () => {
+    mockReceipt({ success: true, receipt: { transactionHash: '0xabc', blockNumber: '0x10' } });
+    const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
+    const receipt = await provider.getReceipt(MOCK_USER_OP_HASH);
+    expect(receipt!.success).toBe(true);
+    expect(receipt!.revertReason).toBeUndefined();
+    expect(receipt!.contractError).toBeUndefined();
+    expect(receipt!.revertSelector).toBeUndefined();
+  });
+
+  it('decodes a standard Error(string) revert from the receipt log', async () => {
+    const reason = epIface.encodeErrorResult('Error', ['boom']);
+    mockReceipt({
+      success: false,
+      logs: [revertLog(reason)],
+      receipt: { transactionHash: '0xabc', blockNumber: '0x10' },
+    });
+    const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
+    const receipt = await provider.getReceipt(MOCK_USER_OP_HASH);
+    expect(receipt!.success).toBe(false);
+    expect(receipt!.revertReason).toBe(reason);
+    expect(receipt!.contractError).toEqual({ name: 'Error', args: ['boom'] });
+    expect(receipt!.revertSelector).toBe('0x08c379a0'); // keccak("Error(string)")[:4]
+  });
+
+  it('preserves raw bytes + selector for an unknown revert selector (no decode)', async () => {
+    const reason = '0xdeadbeef' + '00'.repeat(32);
+    mockReceipt({
+      success: false,
+      logs: [revertLog(reason)],
+      receipt: { transactionHash: '0xabc', blockNumber: '0x10' },
+    });
+    const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
+    const receipt = await provider.getReceipt(MOCK_USER_OP_HASH);
+    expect(receipt!.success).toBe(false);
+    expect(receipt!.revertReason).toBe(reason);
+    expect(receipt!.contractError).toBeUndefined();
+    expect(receipt!.revertSelector).toBe('0xdeadbeef');
+  });
+
+  // Full on-chain path on REAL Base Sepolia receipts: the actual event logs flow
+  // through provider.getReceipt → decodeRevertReason (covers the fixtures' `logs`).
+  //
+  // The expected decode for each captured receipt is stated EXPLICITLY here — not read
+  // from the fixture's own `expect` field — so the assertion documents what each sample
+  // means and a regenerated/incorrect fixture can't silently pass.
+  const expected: Record<string, { revertSelector: string; contractError?: { name: string; args: unknown[] } }> = {
+    'ERC20 transfer exceeds balance (standard Error(string))': {
+      revertSelector: '0x08c379a0', // keccak("Error(string)")[:4]
+      contractError: { name: 'Error', args: ['ERC20: transfer amount exceeds balance'] },
+    },
+    'OZ FailedCall (in shipped ABI)': {
+      revertSelector: '0xd6bda275',
+      contractError: { name: 'FailedCall', args: [] },
+    },
+    // Selectors not in the SDK ABIs → SDK can't decode; raw bytes + selector preserved
+    // for the consumer's own ABI, no contractError.
+    'unknown target selector 0x1b16c2b3': { revertSelector: '0x1b16c2b3' },
+    'unknown target selector 0xe6e287bf': { revertSelector: '0xe6e287bf' },
+  };
+
+  it.each(realRevertFixtures)('surfaces the real revert from receipt logs — $note', async (fx) => {
+    const want = expected[fx.note];
+    expect(want).toBeDefined(); // fixture set changed → add its expectation above
+
+    mockReceipt({
+      success: false,
+      logs: fx.logs,
+      receipt: { transactionHash: fx.txHash, blockNumber: '0x1' },
+    });
+    const provider = new Erc4337BundlerProvider({ rpcUrl: 'https://bundler.example.com' });
+    const receipt = await provider.getReceipt(MOCK_USER_OP_HASH);
+
+    expect(receipt!.success).toBe(false);
+    expect(receipt!.revertReason).toBeTruthy(); // the revert log was found & extracted
+    expect(receipt!.revertSelector).toBe(want.revertSelector);
+    expect(receipt!.contractError).toEqual(want.contractError); // undefined for unknown selectors
   });
 });
