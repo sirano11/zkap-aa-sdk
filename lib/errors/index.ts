@@ -17,3 +17,6 @@ export type { ZkapAaFetchErrorCode, ZkapAaOperationErrorCode, ZkapAaCode, UserOp
 // Factories
 export { wrapAsOperationUnknown, wrapAsFetchUnknown, wrapAsUserOpRevertUnknown } from "./factories";
 export type { UnknownWrapContext } from "./factories";
+
+// Pure code → phase / prefix → code mappings
+export { mapAaPrefix, aaCodeToPhase } from "./phase";

@@ -26,12 +26,14 @@
  * the prefix (AA10-AA95) with a self-documenting meaning. The prefix is preserved
  * so it cross-references with bundler logs.
  *
- * phase mapping (`aaCodeToPhase`, errorMap.ts):
+ * phase mapping (`aaCodeToPhase`, phase.ts):
  *   factory              → AA10/13/14/15
- *   account_validation   → AA20/21/22/23/24/25, AA40/41
- *   paymaster_validation → AA31/32/33/34
+ *   account_validation   → AA20/21/22/23/24/25, AA40/41, AA94
+ *   paymaster_validation → AA31/32/33/34, AA93
+ *   execution            → AA92, AA95
  *   post_op              → AA50/51
- *   unknown              → AA90-95 + UNKNOWN
+ *   settlement           → AA90/91
+ *   unknown              → UNKNOWN (off-spec / unrecognized AA prefix)
  */
 export const AaCode = {
   // factory — initCode / sender creation
@@ -151,11 +153,35 @@ export type ZkapAaCode = AaCode | ZkapAaFetchErrorCode | ZkapAaOperationErrorCod
 // ============================================================================
 // UserOpRevertPhase — UserOp lifecycle stage (not detection context)
 // ============================================================================
+/**
+ * UserOp lifecycle stage at which the EntryPoint rejected/reverted the op, following
+ * the ERC-4337 `handleOps` flow (validation → execution → post-op/settlement). This is
+ * the *stage*, not the detection context — submit vs estimate is carried by `operation`.
+ *
+ * `phase` is a coarse bucket; the precise signal is always in `code`.
+ */
 export type UserOpRevertPhase =
-  | "factory"              // initCode/sender creation (AA10/13/14/15)
-  | "account_validation"   // account validation (AA20-25, AA40/41)
-  | "paymaster_validation" // paymaster validation (AA31-34)
-  | "execution"            // actual callData execution
-  | "post_op"              // paymaster postOp (AA50/51)
-  | "unknown";             // fallback when AA prefix extraction fails
+  // initCode ran to deploy the sender account.
+  // AA10 (already constructed), AA13/14/15 (initCode failed / bad return).
+  | "factory"
+  // account's validateUserOp, plus the pre-validation gas/prefund checks that gate it.
+  // AA20-25 (deploy / prefund / expiry / revert / sig / nonce), AA40/41 (verification
+  // gas), AA94 (gas-field overflow precheck in _validatePrepayment).
+  | "account_validation"
+  // paymaster's validatePaymasterUserOp, plus parsing of the paymasterAndData field.
+  // AA31-34 (deposit / expiry / revert / sig), AA93 (paymasterAndData too short).
+  | "paymaster_validation"
+  // EntryPoint executed the op's callData (innerHandleOp).
+  // AA92 (internal-call guard on innerHandleOp), AA95 (out of gas before the callData call).
+  | "execution"
+  // paymaster postOp callback, run per-op right after the callData executes.
+  // AA50 (postOp reverted), AA51 (prefund below actual gas cost).
+  | "post_op"
+  // per-batch settlement in `_compensate`: EntryPoint pays the collected fees to the
+  // bundler's beneficiary, once after every op (and its postOp) has run.
+  // AA90 (invalid beneficiary), AA91 (failed send to beneficiary).
+  | "settlement"
+  // not attributable to a stage: the AA prefix was off-spec / unrecognized
+  // (AaCode.UNKNOWN), so the code itself is unknown and no stage can be derived.
+  | "unknown";
 
