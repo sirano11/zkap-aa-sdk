@@ -7,7 +7,6 @@ import { ethers } from 'ethers';
 
 import { BundlerClient } from '../BundlerClient';
 import { ZkapBundlerProvider, Erc4337BundlerProvider } from '../BundlerProvider';
-import { BundlerError } from '../types';
 import { AaCode, AaFetchError, AaFetchErrorCode, UserOpRevertError } from '../../errors';
 import { EntryPointABI } from '../../types/abi';
 import revertReceipts from './fixtures/revert-receipts.json';
@@ -95,7 +94,7 @@ describe('BundlerClient', () => {
 
     it('propagates provider errors', async () => {
       const provider = makeMockProvider({
-        submitUserOp: jest.fn().mockRejectedValue(new BundlerError('rejected', 'BUNDLER_REJECTED', false)),
+        submitUserOp: jest.fn().mockRejectedValue(new Error('rejected')),
       });
       const client = new BundlerClient(provider);
 
@@ -187,7 +186,7 @@ describe('BundlerClient', () => {
       expect(result.success).toBe(false);
     });
 
-    it('throws BundlerError with BUNDLER_TIMEOUT code on timeout', async () => {
+    it('throws AaFetchError (TIMEOUT) on timeout', async () => {
       const provider = makeMockProvider({
         getStatus: jest.fn().mockResolvedValue('pending' as UserOpStatus),
       });
@@ -195,11 +194,11 @@ describe('BundlerClient', () => {
 
       await expect(
         client.waitForReceipt(MOCK_USER_OP_HASH, { pollInterval: 10, timeout: 50 })
-      ).rejects.toThrow(BundlerError);
+      ).rejects.toThrow(AaFetchError);
 
       await expect(
         client.waitForReceipt(MOCK_USER_OP_HASH, { pollInterval: 10, timeout: 50 })
-      ).rejects.toMatchObject({ code: 'BUNDLER_TIMEOUT', retryable: false });
+      ).rejects.toMatchObject({ code: AaFetchErrorCode.TIMEOUT, service: 'bundler' });
     });
 
     it('timeout error message contains userOpHash and timeout value', async () => {
@@ -225,37 +224,6 @@ describe('BundlerClient', () => {
       const result = await client.waitForReceipt(MOCK_USER_OP_HASH);
       expect(result.userOpHash).toBe(MOCK_USER_OP_HASH);
     });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// BundlerError
-// ---------------------------------------------------------------------------
-
-describe('BundlerError', () => {
-  it('has correct name, code, and retryable flag', () => {
-    const err = new BundlerError('msg', 'AA21_INSUFFICIENT_FUNDS', false);
-    expect(err.name).toBe('BundlerError');
-    expect(err.code).toBe('AA21_INSUFFICIENT_FUNDS');
-    expect(err.retryable).toBe(false);
-    expect(err.message).toBe('msg');
-    expect(err).toBeInstanceOf(Error);
-  });
-
-  it('retryable defaults to false', () => {
-    const err = new BundlerError('msg', 'BUNDLER_REJECTED');
-    expect(err.retryable).toBe(false);
-  });
-
-  it('retryable can be set to true', () => {
-    const err = new BundlerError('network issue', 'NETWORK_ERROR', true);
-    expect(err.retryable).toBe(true);
-  });
-
-  it('is instanceof BundlerError and Error', () => {
-    const err = new BundlerError('msg', 'BUNDLER_TIMEOUT', false);
-    expect(err instanceof BundlerError).toBe(true);
-    expect(err instanceof Error).toBe(true);
   });
 });
 

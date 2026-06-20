@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
 import { AccountKeyBuilder } from "../builders/AccountKeyBuilder";
+import { AaOperationError, AaOperationErrorCode } from "../errors";
 import type { WebAuthnKeyData as BuilderWebAuthnKeyData } from "../types/AccountKey";
 import type { TxKeyInfo } from "../reader/AccountReader";
 
@@ -50,14 +51,18 @@ export class TxKeyHelper {
   ): string {
     const totalKeys = existingEntries.length + 1;
     if (totalKeys > MAX_TX_KEYS) {
-      throw new Error(
-        `Cannot add key: would exceed maximum of ${MAX_TX_KEYS} txKeys (current: ${existingEntries.length})`,
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_OUT_OF_RANGE,
+        operation: "build_add_tx_key_encoding",
+        message: `Cannot add key: would exceed maximum of ${MAX_TX_KEYS} txKeys (current: ${existingEntries.length})`,
+      });
     }
     if (threshold > totalKeys) {
-      throw new Error(
-        `threshold (${threshold}) exceeds total key count (${totalKeys})`,
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_THRESHOLD_INVALID,
+        operation: "build_add_tx_key_encoding",
+        message: `threshold (${threshold}) exceeds total key count (${totalKeys})`,
+      });
     }
 
     const logicList = existingEntries.map((e) => e.logicContract);
@@ -106,12 +111,18 @@ export class TxKeyHelper {
       .filter((i) => i !== -1);
 
     if (matchIndices.length === 0) {
-      throw new Error(`No txKey found matching rpIdHash: ${rpIdHash}`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID,
+        operation: "build_replace_tx_key_by_rp_id",
+        message: `No txKey found matching rpIdHash: ${rpIdHash}`,
+      });
     }
     if (matchIndices.length > 1) {
-      throw new Error(
-        `Multiple txKeys (${matchIndices.length}) match rpIdHash: ${rpIdHash}. Use buildRebuildTxKeyEncoding with explicit indices instead.`,
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID,
+        operation: "build_replace_tx_key_by_rp_id",
+        message: `Multiple txKeys (${matchIndices.length}) match rpIdHash: ${rpIdHash}. Use buildRebuildTxKeyEncoding with explicit indices instead.`,
+      });
     }
 
     const matchIndex = matchIndices[0];
@@ -130,16 +141,22 @@ export class TxKeyHelper {
         // Preserve existing WebAuthn key — re-encode from on-chain data
         const origin = originResolver(key.webauthn.allowedOriginHash);
         if (!origin) {
-          throw new Error(`originResolver returned empty origin for hash: ${key.webauthn.allowedOriginHash}`);
+          throw new AaOperationError({
+            code: AaOperationErrorCode.INPUT_INVALID,
+            operation: "build_replace_tx_key_by_rp_id",
+            message: `originResolver returned empty origin for hash: ${key.webauthn.allowedOriginHash}`,
+          });
         }
         const reEncodedInitData = TxKeyHelper._reEncodeExistingWebAuthnKey(key, origin);
         logicList.push(key.logicContract);
         keyInitDataList.push(reEncodedInitData);
         weightList.push(1);
       } else {
-        throw new Error(
-          `Non-WebAuthn key at index ${i} (type: ${key.keyType}) cannot be re-encoded. Use buildAddTxKeyEncoding with pre-built ExistingKeyEntry instead.`,
-        );
+        throw new AaOperationError({
+          code: AaOperationErrorCode.INPUT_UNSUPPORTED,
+          operation: "build_replace_tx_key_by_rp_id",
+          message: `Non-WebAuthn key at index ${i} (type: ${key.keyType}) cannot be re-encoded. Use buildAddTxKeyEncoding with pre-built ExistingKeyEntry instead.`,
+        });
       }
     }
 
@@ -158,7 +175,11 @@ export class TxKeyHelper {
     origin: string,
   ): ExistingKeyEntry {
     if (key.keyType !== "webauthn" || !key.webauthn) {
-      throw new Error(`Only WebAuthn keys are supported (got: ${key.keyType})`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_UNSUPPORTED,
+        operation: "tx_key_info_to_entry",
+        message: `Only WebAuthn keys are supported (got: ${key.keyType})`,
+      });
     }
     return {
       logicContract: key.logicContract,

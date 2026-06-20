@@ -17,6 +17,7 @@ import {
   ZkOAuthRS256KeyInfo,
 } from "../types/AccountKey";
 import crypto from "../utils/crypto";
+import { AaOperationError, AaOperationErrorCode } from "../errors";
 /* Copied from @simplewebauthn/server/src/helpers/iso/isoCBOR.ts */
 import * as tinyCbor from "@levischuck/tiny-cbor";
 
@@ -148,7 +149,11 @@ export class AccountKeyBuilder {
    */
   static computeHAudList(audiences: string[]): string {
     if (!audiences || audiences.length === 0) {
-      throw new Error('computeHAudList: audiences must be a non-empty array');
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_OUT_OF_RANGE,
+        operation: "compute_h_aud_list",
+        message: 'computeHAudList: audiences must be a non-empty array',
+      });
     }
     return ethers.keccak256(
       ethers.AbiCoder.defaultAbiCoder().encode(['string[]'], [audiences])
@@ -177,10 +182,13 @@ export class AccountKeyBuilder {
       zkOAuthRS256KeyData;
 
     if (!hAudList || hAudList.length === 0 || hAudList === '0x') {
-      throw new Error(
-        "ZkOAuthRS256KeyData.hAudList is required and must be a non-zero value. " +
-        "Use AccountKeyBuilder.computeHAudList(audiences) to generate the correct value."
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID,
+        operation: "get_encoded_zk_o_auth_rs256_key_init_data",
+        message:
+          "ZkOAuthRS256KeyData.hAudList is required and must be a non-zero value. " +
+          "Use AccountKeyBuilder.computeHAudList(audiences) to generate the correct value.",
+      });
     }
 
     const abiCoder = ethers.AbiCoder.defaultAbiCoder();
@@ -227,7 +235,11 @@ export class AccountKeyBuilder {
         const webAuthnKeyData = keyInfo.keyData as WebAuthnKeyData;
         keyInitData = this.getEncodedWebAuthnKeyInitData(webAuthnKeyData);
       } else {
-        throw new Error(`Unsupported key type: ${keyInfo.keyType}`);
+        throw new AaOperationError({
+          code: AaOperationErrorCode.INPUT_UNSUPPORTED,
+          operation: "set_encoded_key_data",
+          message: `Unsupported key type: ${keyInfo.keyType}`,
+        });
       }
       keyInitDataList.push(keyInitData);
     }
@@ -246,14 +258,22 @@ export class AccountKeyBuilder {
 
   private checkThreshold(): boolean {
     if (this.threshold <= 0) {
-      throw new Error("Threshold must be greater than 0");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_THRESHOLD_INVALID,
+        operation: "check_threshold",
+        message: "Threshold must be greater than 0",
+      });
     }
     let weightSum = 0;
     for (const key of this.keys) {
       weightSum += key.weight;
     }
     if (weightSum < this.threshold) {
-      throw new Error("Threshold is greater than the sum of weights");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_THRESHOLD_INVALID,
+        operation: "check_threshold",
+        message: "Threshold is greater than the sum of weights",
+      });
     }
     return true;
   }
@@ -277,27 +297,47 @@ export class AccountKeyBuilder {
       ethers.getBytes(credentialPubkey)
     );
     if (!this.isCOSEPublicKeyEC2(pubkey)) {
-      throw new Error("Not EC2");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_KEY_INVALID,
+        operation: "get_encoded_web_authn_key",
+        message: "Not EC2",
+      });
     }
     const alg = (pubkey as COSEPublicKeyEC2).get(COSEKEYS.alg);
     const crv = (pubkey as COSEPublicKeyEC2).get(COSEKEYS.crv);
     /* istanbul ignore next */
     if (alg !== -7) {
-      throw new Error(`Unsupported COSE algorithm: ${alg}. Expected ES256 (-7).`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_KEY_INVALID,
+        operation: "get_encoded_web_authn_key",
+        message: `Unsupported COSE algorithm: ${alg}. Expected ES256 (-7).`,
+      });
     }
     /* istanbul ignore next */
     if (crv !== 1) {
-      throw new Error(`Unsupported COSE curve: ${crv}. Expected P-256 (1).`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_KEY_INVALID,
+        operation: "get_encoded_web_authn_key",
+        message: `Unsupported COSE curve: ${crv}. Expected P-256 (1).`,
+      });
     }
     const x = (pubkey as COSEPublicKeyEC2).get(COSEKEYS.x) as Uint8Array;
     const y = (pubkey as COSEPublicKeyEC2).get(COSEKEYS.y) as Uint8Array;
     /* istanbul ignore next */
     if (!x || x.length !== 32) {
-      throw new Error(`Invalid COSE public key: x coordinate must be 32 bytes, got ${x?.length}`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_KEY_INVALID,
+        operation: "get_encoded_web_authn_key",
+        message: `Invalid COSE public key: x coordinate must be 32 bytes, got ${x?.length}`,
+      });
     }
     /* istanbul ignore next */
     if (!y || y.length !== 32) {
-      throw new Error(`Invalid COSE public key: y coordinate must be 32 bytes, got ${y?.length}`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_KEY_INVALID,
+        operation: "get_encoded_web_authn_key",
+        message: `Invalid COSE public key: y coordinate must be 32 bytes, got ${y?.length}`,
+      });
     }
     const abiCoder = ethers.AbiCoder.defaultAbiCoder();
 
@@ -361,7 +401,11 @@ export class AccountKeyBuilder {
     const pubkeyBytes = ethers.getBytes(pubkey);
     /* istanbul ignore next */
     if (pubkeyBytes.length !== 65 || pubkeyBytes[0] !== 0x04) {
-      throw new Error(`Invalid uncompressed public key: expected 65 bytes with 0x04 prefix, got ${pubkeyBytes.length} bytes`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_KEY_INVALID,
+        operation: "get_encoded_ec_key",
+        message: `Invalid uncompressed public key: expected 65 bytes with 0x04 prefix, got ${pubkeyBytes.length} bytes`,
+      });
     }
     const x = ethers.hexlify(pubkeyBytes.slice(1, 33));
     const y = ethers.hexlify(pubkeyBytes.slice(33, 65));
@@ -370,7 +414,11 @@ export class AccountKeyBuilder {
     const xBigInt = BigInt(x);
     const yBigInt = BigInt(y);
     if (xBigInt === 0n || yBigInt === 0n) {
-      throw new Error("Invalid public key: x and y coordinates must be non-zero");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_KEY_INVALID,
+        operation: "get_encoded_ec_key",
+        message: "Invalid public key: x and y coordinates must be non-zero",
+      });
     }
 
     const abiCoder = ethers.AbiCoder.defaultAbiCoder();
@@ -388,7 +436,11 @@ export class AccountKeyBuilder {
 
   getEncodedZkOAuthRS256Key(userSpecificVk: string[]): string {
     if (userSpecificVk.length !== 16) {
-      throw new Error("userSpecificVk must be 16 elements");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.CRYPTO_INVALID_LENGTH,
+        operation: "get_encoded_zk_o_auth_rs256_key",
+        message: "userSpecificVk must be 16 elements",
+      });
     }
 
     const userSpecificVkArray = crypto.userSpecificVkParser(userSpecificVk);

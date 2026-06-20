@@ -1,30 +1,60 @@
 import { ethers } from "ethers";
 
+import { AaOperationError, AaOperationErrorCode } from "../errors";
+
 export function unwrapSignature(sigBuffer: Uint8Array) {
   if (sigBuffer.length < 8) {
-    throw new Error("DER signature too short");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.INPUT_INVALID_FORMAT,
+      operation: "unwrap_signature",
+      message: "DER signature too short",
+    });
   }
   if (sigBuffer[0] !== 0x30) {
-    throw new Error("Expected DER SEQUENCE tag (0x30)");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.INPUT_INVALID_FORMAT,
+      operation: "unwrap_signature",
+      message: "Expected DER SEQUENCE tag (0x30)",
+    });
   }
   if (sigBuffer[2] !== 0x02) {
-    throw new Error("Expected DER INTEGER tag (0x02) for r");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.INPUT_INVALID_FORMAT,
+      operation: "unwrap_signature",
+      message: "Expected DER INTEGER tag (0x02) for r",
+    });
   }
   const rLength = sigBuffer[3];
   if (rLength > sigBuffer.length - 4) {
-    throw new Error("Invalid r length in DER signature");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.INPUT_INVALID_FORMAT,
+      operation: "unwrap_signature",
+      message: "Invalid r length in DER signature",
+    });
   }
   // Validate s INTEGER tag
   const sTagOffset = 4 + rLength;
   if (sTagOffset + 1 >= sigBuffer.length) {
-    throw new Error("DER signature too short for s component");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.INPUT_INVALID_FORMAT,
+      operation: "unwrap_signature",
+      message: "DER signature too short for s component",
+    });
   }
   if (sigBuffer[sTagOffset] !== 0x02) {
-    throw new Error("Expected DER INTEGER tag (0x02) for s");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.INPUT_INVALID_FORMAT,
+      operation: "unwrap_signature",
+      message: "Expected DER INTEGER tag (0x02) for s",
+    });
   }
   const sLength = sigBuffer[sTagOffset + 1];
   if (sTagOffset + 2 + sLength > sigBuffer.length) {
-    throw new Error("Invalid s length in DER signature");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.INPUT_INVALID_FORMAT,
+      operation: "unwrap_signature",
+      message: "Invalid s length in DER signature",
+    });
   }
   // Right-align r and s to 32 bytes
   // DER may add a leading 0x00 sign byte (when MSB=1) or omit leading zeros,
@@ -112,7 +142,11 @@ export function fromHex(hex: string | null) {
   const isValid =
     hex.length !== 0 && hex.length % 2 === 0 && !/[^a-fA-F0-9]/u.test(hex);
   if (!isValid) {
-    throw new Error("Invalid hex string");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.INPUT_INVALID_FORMAT,
+      operation: "from_hex",
+      message: "Invalid hex string",
+    });
   }
   /* istanbul ignore next */
   const byteStrings = hex.match(/.{1,2}/g) ?? [];

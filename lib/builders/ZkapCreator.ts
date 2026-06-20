@@ -53,7 +53,6 @@ export interface ZkapCreatorInfo {
  */
 export class ZkapCreator extends ZkapBuilder {
   private zkapFactory: string;
-  private enUrl: string;
   private salt: string;
   private encodedMasterKey: string;
   private encodedTxKey: string;
@@ -87,7 +86,6 @@ export class ZkapCreator extends ZkapBuilder {
     this.salt = salt;
     this.encodedMasterKey = encodedMasterKey;
     this.encodedTxKey = encodedTxKey;
-    this.enUrl = enUrl;
   }
 
   /**

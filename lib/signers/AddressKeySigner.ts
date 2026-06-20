@@ -1,6 +1,7 @@
 import { ethers } from "ethers";
 import { IUserOpSigner } from "../utils/IUserOpSigner";
 import { PrimitiveAccountKeyTypes } from "../types/AccountKey";
+import { AaOperationError, AaOperationErrorCode } from "../errors";
 
 /**
  * Signs UserOperation hashes using one or more Ethereum private keys (secp256k1 ECDSA).
@@ -30,13 +31,21 @@ export class AddressKeySigner implements IUserOpSigner {
    */
   constructor(privateKeys: string[]) {
     if (!Array.isArray(privateKeys) || privateKeys.length === 0) {
-      throw new Error("AddressKeySigner: privateKeys must be a non-empty array");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_OUT_OF_RANGE,
+        operation: "init_address_key_signer",
+        message: "AddressKeySigner: privateKeys must be a non-empty array",
+      });
     }
     for (let i = 0; i < privateKeys.length; i++) {
       try {
         new ethers.Wallet(privateKeys[i]);
       } catch {
-        throw new Error(`AddressKeySigner: privateKeys[${i}] is not a valid private key`);
+        throw new AaOperationError({
+          code: AaOperationErrorCode.SIGNER_KEY_INVALID,
+          operation: "init_address_key_signer",
+          message: `AddressKeySigner: privateKeys[${i}] is not a valid private key`,
+        });
       }
     }
     this.privateKeys = privateKeys;

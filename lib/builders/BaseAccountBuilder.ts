@@ -1,5 +1,6 @@
 import { UserOperation, PackedUserOperation } from "../types/UserOperation";
 import { ethers } from "ethers";
+import { AaOperationError, AaOperationErrorCode, AaFetchError, AaFetchErrorCode } from "../errors";
 
 export abstract class BaseAccountBuilder {
   /** Multiplier to add 20% buffer to gas estimates (120/100 = 1.2x) */
@@ -37,10 +38,18 @@ export abstract class BaseAccountBuilder {
     rpcEstimateGasCap?: bigint
   ) {
     if (!Number.isInteger(chainId) || chainId <= 0) {
-      throw new Error(`Invalid chainId: ${chainId}. Must be a positive integer.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_OUT_OF_RANGE,
+        operation: "init_base_account_builder",
+        message: `Invalid chainId: ${chainId}. Must be a positive integer.`,
+      });
     }
     if (!ethers.isAddress(entryPoint) || entryPoint === ethers.ZeroAddress) {
-      throw new Error(`Invalid entryPoint address: "${entryPoint}". Must be a non-zero Ethereum address.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_ADDRESS,
+        operation: "init_base_account_builder",
+        message: `Invalid entryPoint address: "${entryPoint}". Must be a non-zero Ethereum address.`,
+      });
     }
     this.chainId = chainId;
     this.entryPoint = entryPoint;
@@ -117,7 +126,11 @@ export abstract class BaseAccountBuilder {
    */
   encodeUserOpForPaymaster(packedUserOp: PackedUserOperation, paymasterSigBytes: number = 65): string {
     if (!Number.isInteger(paymasterSigBytes) || paymasterSigBytes < 1 || paymasterSigBytes > 256) {
-      throw new Error(`Invalid paymasterSigBytes: ${paymasterSigBytes}. Must be an integer between 1 and 256.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_OUT_OF_RANGE,
+        operation: "encode_user_op_for_paymaster",
+        message: `Invalid paymasterSigBytes: ${paymasterSigBytes}. Must be an integer between 1 and 256.`,
+      });
     }
     const defaultAbiCoder = ethers.AbiCoder.defaultAbiCoder();
     const PAYMASTER_SIG_BYTES = paymasterSigBytes;
@@ -130,9 +143,11 @@ export abstract class BaseAccountBuilder {
     // 236 = (paymaster_addr(20) + verifyGasLimit(16) + postOpGasLimit(16) + sig(65)) * 2 hex chars + 2 ("0x")
     if (packedUserOp.paymasterAndData.length < BaseAccountBuilder.PAYMASTER_AND_DATA_MIN_HEX_LENGTH) {
       // "0x" prefix(2) + less than minimum sig length means there is no signature area
-      throw new Error(
-        `paymasterAndData too short to contain signature: length=${packedUserOp.paymasterAndData.length}, expected at least ${BaseAccountBuilder.PAYMASTER_AND_DATA_MIN_HEX_LENGTH}`
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_FORMAT,
+        operation: "encode_user_op_for_paymaster",
+        message: `paymasterAndData too short to contain signature: length=${packedUserOp.paymasterAndData.length}, expected at least ${BaseAccountBuilder.PAYMASTER_AND_DATA_MIN_HEX_LENGTH}`,
+      });
     }
     // paymasterAndData = paymaster_addr(20) + verifyGasLimit(16) + postOpGasLimit(16) + paymasterData
     // The last PAYMASTER_SIG_BYTES bytes of paymasterData are the signature. Signature is always last regardless of mode.
@@ -293,7 +308,11 @@ export abstract class BaseAccountBuilder {
   /** Sets the smart wallet address that will send this UserOperation. */
   setSender(sender: string): this {
     if (!ethers.isAddress(sender)) {
-      throw new Error(`setSender: invalid Ethereum address: "${sender}"`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_ADDRESS,
+        operation: "set_sender",
+        message: `setSender: invalid Ethereum address: "${sender}"`,
+      });
     }
     this.userOp.sender = sender;
     return this;
@@ -336,7 +355,11 @@ export abstract class BaseAccountBuilder {
 
   setPaymaster(paymaster: string): this {
     if (!ethers.isAddress(paymaster)) {
-      throw new Error(`setPaymaster: invalid Ethereum address: "${paymaster}"`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_ADDRESS,
+        operation: "set_paymaster",
+        message: `setPaymaster: invalid Ethereum address: "${paymaster}"`,
+      });
     }
     this.userOp.paymaster = paymaster;
     return this;
@@ -363,7 +386,11 @@ export abstract class BaseAccountBuilder {
     this.applyDefaults(); // Apply defaults only to unset fields (preserves existing values)
 
     if (!this.userOp.sender || !ethers.isAddress(this.userOp.sender) || this.userOp.sender === ethers.ZeroAddress) {
-      throw new Error("Sender is not set or is zero address. Please set a valid sender address.");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_FIELD_NOT_SET,
+        operation: "get_user_op",
+        message: "Sender is not set or is zero address. Please set a valid sender address.",
+      });
     }
 
     return this.userOp as UserOperation;
@@ -445,7 +472,11 @@ export abstract class BaseAccountBuilder {
   async estimateUserOpGasCost(userOp: UserOperation): Promise<string> {
 
     if (!this.provider) {
-      throw new Error("Provider is required for gas estimation");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_MISSING_DEPENDENCY,
+        operation: "estimate_user_op_gas_cost",
+        message: "Provider is required for gas estimation",
+      });
     }
 
     try {
@@ -488,10 +519,14 @@ export abstract class BaseAccountBuilder {
 
       return totalCost.toString();
     } catch (error) {
-      throw Object.assign(
-        new Error(`Failed to estimate gas cost: ${error instanceof Error ? error.message : error}`),
-        { cause: error }
-      );
+      throw new AaFetchError({
+        code: AaFetchErrorCode.TRANSPORT,
+        operation: "estimate_user_op_gas_cost",
+        service: "rpc",
+        method: "POST",
+        cause: error,
+        message: `Failed to estimate gas cost: ${error instanceof Error ? error.message : error}`,
+      });
     }
   }
 
@@ -533,7 +568,11 @@ export abstract class BaseAccountBuilder {
   ): Promise<bigint> {
     /* istanbul ignore next */
     if (!this.provider) {
-      throw new Error("Provider is required for verification gas estimation");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_MISSING_DEPENDENCY,
+        operation: "estimate_verification_gas",
+        message: "Provider is required for verification gas estimation",
+      });
     }
 
     try {
@@ -569,10 +608,14 @@ export abstract class BaseAccountBuilder {
       /* istanbul ignore next */
       return (gasEstimate * BaseAccountBuilder.GAS_ESTIMATE_MULTIPLIER) / BaseAccountBuilder.GAS_ESTIMATE_DIVISOR;
     } catch (error) {
-      throw Object.assign(
-        new Error(`Verification gas estimation failed: ${error instanceof Error ? error.message : error}`),
-        { cause: error }
-      );
+      throw new AaFetchError({
+        code: AaFetchErrorCode.TRANSPORT,
+        operation: "estimate_verification_gas",
+        service: "rpc",
+        method: "POST",
+        cause: error,
+        message: `Verification gas estimation failed: ${error instanceof Error ? error.message : error}`,
+      });
     }
   }
 
@@ -584,7 +627,11 @@ export abstract class BaseAccountBuilder {
   private async estimateCallGas(userOp: UserOperation): Promise<bigint> {
     /* istanbul ignore next */
     if (!this.provider) {
-      throw new Error("Provider is required for call gas estimation");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_MISSING_DEPENDENCY,
+        operation: "estimate_call_gas",
+        message: "Provider is required for call gas estimation",
+      });
     }
 
     try {
@@ -626,10 +673,14 @@ export abstract class BaseAccountBuilder {
       return (gasEstimate * BaseAccountBuilder.GAS_ESTIMATE_MULTIPLIER) / BaseAccountBuilder.GAS_ESTIMATE_DIVISOR;
     } catch (error) {
       /* istanbul ignore next */
-      throw Object.assign(
-        new Error(`Call gas estimation failed: ${error instanceof Error ? error.message : error}`),
-        { cause: error }
-      );
+      throw new AaFetchError({
+        code: AaFetchErrorCode.TRANSPORT,
+        operation: "estimate_call_gas",
+        service: "rpc",
+        method: "POST",
+        cause: error,
+        message: `Call gas estimation failed: ${error instanceof Error ? error.message : error}`,
+      });
     }
   }
 
@@ -701,10 +752,14 @@ export abstract class BaseAccountBuilder {
       };
     /* istanbul ignore next */
     } catch (error) {
-      throw Object.assign(
-        new Error(`Paymaster gas estimation failed: ${error instanceof Error ? error.message : error}`),
-        { cause: error }
-      );
+      throw new AaFetchError({
+        code: AaFetchErrorCode.TRANSPORT,
+        operation: "estimate_paymaster_gas",
+        service: "rpc",
+        method: "POST",
+        cause: error,
+        message: `Paymaster gas estimation failed: ${error instanceof Error ? error.message : error}`,
+      });
     }
   }
 

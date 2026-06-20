@@ -41,8 +41,7 @@ export { computeSalt } from "./utils/salt";
 export { BundlerClient } from "./client/BundlerClient";
 export { ZkapBundlerProvider, Erc4337BundlerProvider } from "./client/BundlerProvider";
 export type { Erc4337BundlerProviderConfig } from "./client/BundlerProvider";
-export { BundlerError } from "./client/types";
-export type { BundlerProvider, BundlerErrorCode, UserOpStatus, UserOpReceipt } from "./client/types";
+export type { BundlerProvider, UserOpStatus, UserOpReceipt } from "./client/types";
 
 // Error model (ZkapAaError hierarchy + 카탈로그 + 팩토리)
 export * from "./errors";

@@ -1,5 +1,6 @@
 import { base64URLdecode, toURLEncode } from "../utils/base64url";
 import { IUserOpSigner } from "../utils/IUserOpSigner";
+import { AaOperationError, AaOperationErrorCode } from "../errors";
 import {
   unwrapSignature,
   flipSecp256r1Signature,
@@ -121,20 +122,44 @@ export class PasskeySigner implements IUserOpSigner {
 
     const typeKey = encoder.encode('"type":"');
     const typeKeyOffset = findSubarray(clientJsonBytes, typeKey);
-    if (typeKeyOffset < 0) throw new Error('signUserOpHash: clientDataJSON missing "type" field');
+    if (typeKeyOffset < 0) {
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_KEY_INVALID,
+        operation: "sign_user_op_hash",
+        message: 'signUserOpHash: clientDataJSON missing "type" field',
+      });
+    }
     const typeIndex = typeKeyOffset + typeKey.byteLength;
 
     const challengeKey = encoder.encode('"challenge":"');
     const challengeKeyOffset = findSubarray(clientJsonBytes, challengeKey);
-    if (challengeKeyOffset < 0) throw new Error('signUserOpHash: clientDataJSON missing "challenge" field');
+    if (challengeKeyOffset < 0) {
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_KEY_INVALID,
+        operation: "sign_user_op_hash",
+        message: 'signUserOpHash: clientDataJSON missing "challenge" field',
+      });
+    }
     const challengeIndex = challengeKeyOffset + challengeKey.byteLength;
 
     const originKey = encoder.encode('"origin":"');
     const originKeyOffset = findSubarray(clientJsonBytes, originKey);
-    if (originKeyOffset < 0) throw new Error('signUserOpHash: clientDataJSON missing "origin" field');
+    if (originKeyOffset < 0) {
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_KEY_INVALID,
+        operation: "sign_user_op_hash",
+        message: 'signUserOpHash: clientDataJSON missing "origin" field',
+      });
+    }
     const originIndex = originKeyOffset + originKey.byteLength;
     const originEnd = findByte(clientJsonBytes, 0x22, originIndex); // 0x22 = '"'
-    if (originEnd < 0) throw new Error('signUserOpHash: clientDataJSON "origin" value not terminated');
+    if (originEnd < 0) {
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_KEY_INVALID,
+        operation: "sign_user_op_hash",
+        message: 'signUserOpHash: clientDataJSON "origin" value not terminated',
+      });
+    }
     const originLength = originEnd - originIndex;
 
     const abiCoder = ethers.AbiCoder.defaultAbiCoder();

@@ -2,6 +2,7 @@ import { BaseAccountBuilder } from "./BaseAccountBuilder";
 import { CallDataBuilder } from "./CallDataBuilder";
 import { PrimitiveAccountKeyTypes } from "../types/AccountKey";
 import { UserOperation } from "../types/UserOperation";
+import { AaOperationError, AaOperationErrorCode, AaFetchError, AaFetchErrorCode } from "../errors";
 import {
   ERC20ABI,
   ZkapAccountABI,
@@ -60,6 +61,7 @@ export class ZkapBuilder extends BaseAccountBuilder {
     ZkapAccountFactoryABI
   );
   protected provider: ethers.JsonRpcProvider;
+  protected readonly enUrl: string;
   private signerKeyTypes: number[] | undefined;
   private paymasterService: PaymasterService | undefined;
 
@@ -67,11 +69,16 @@ export class ZkapBuilder extends BaseAccountBuilder {
     try {
       new URL(enUrl);
     } catch {
-      throw new Error(`Invalid enUrl: "${enUrl}". Must be a valid URL.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_URL,
+        operation: "init_zkap_builder",
+        message: `Invalid enUrl: "${enUrl}". Must be a valid URL.`,
+      });
     }
     const provider = new ethers.JsonRpcProvider(enUrl);
     super(chainId, entryPoint, provider, rpcEstimateGasCap);
     this.provider = provider;
+    this.enUrl = enUrl;
 
     // Create PaymasterService instance if paymaster config is provided
     if (paymaster) {
@@ -97,9 +104,12 @@ export class ZkapBuilder extends BaseAccountBuilder {
       !this.userOp.preVerificationGas ||
       !this.userOp.maxFeePerGas
     ) {
-      throw new Error(
-        "Required gas fields not set: verificationGasLimit, callGasLimit, paymasterVerificationGasLimit, paymasterPostOpGasLimit, preVerificationGas, and maxFeePerGas must all be set."
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_FIELD_NOT_SET,
+        operation: "get_required_prefund",
+        message:
+          "Required gas fields not set: verificationGasLimit, callGasLimit, paymasterVerificationGasLimit, paymasterPostOpGasLimit, preVerificationGas, and maxFeePerGas must all be set.",
+      });
     }
     const requiredGas =
       BigInt(this.userOp.verificationGasLimit) +
@@ -154,7 +164,11 @@ export class ZkapBuilder extends BaseAccountBuilder {
     } else {
       // Wallet is not deployed and no initCode provided — invalid scenario
       if (!this.userOp.initCode || this.userOp.initCode === "0x") {
-        throw new Error("Wallet not deployed and no initCode provided");
+        throw new AaOperationError({
+          code: AaOperationErrorCode.STATE_FIELD_NOT_SET,
+          operation: "estimate_call_gas_limit",
+          message: "Wallet not deployed and no initCode provided",
+        });
       }
 
       // initCode present but no callData (wallet creation only)
@@ -170,7 +184,11 @@ export class ZkapBuilder extends BaseAccountBuilder {
       try {
         const parsedTx = iface.parseTransaction({ data: callData });
         if (!parsedTx) {
-          throw new Error("callData could not be parsed. Manual callGasLimit required.");
+          throw new AaOperationError({
+            code: AaOperationErrorCode.ENCODE_PARSE_FAILED,
+            operation: "estimate_call_gas_limit",
+            message: "callData could not be parsed. Manual callGasLimit required.",
+          });
         }
         switch (parsedTx.name) {
           case "execute": {
@@ -232,16 +250,22 @@ export class ZkapBuilder extends BaseAccountBuilder {
 
           default:
             // Unsupported function: throw error to require manual handling.
-            throw new Error(
-              `Unsupported function for gas estimation: ${parsedTx.name}`
-            );
+            throw new AaOperationError({
+              code: AaOperationErrorCode.ENCODE_PARSE_FAILED,
+              operation: "estimate_call_gas_limit",
+              message: `Unsupported function for gas estimation: ${parsedTx.name}`,
+            });
         }
       } catch (error) {
         if (error instanceof Error) {
           throw error;
         }
         const original = typeof error === 'string' ? error : JSON.stringify(error);
-        throw new Error(`callData could not be parsed. Manual callGasLimit required. Original: ${original}`);
+        throw new AaOperationError({
+          code: AaOperationErrorCode.ENCODE_PARSE_FAILED,
+          operation: "estimate_call_gas_limit",
+          message: `callData could not be parsed. Manual callGasLimit required. Original: ${original}`,
+        });
       }
     }
   }
@@ -252,7 +276,11 @@ export class ZkapBuilder extends BaseAccountBuilder {
     value: ethers.BigNumberish
   ): this {
     if (!this.userOp.callData || this.userOp.callData === "0x") {
-      throw new Error("Call data is not set");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_FIELD_NOT_SET,
+        operation: "update_user_op_call_data_for_paymaster_erc20",
+        message: "Call data is not set",
+      });
     }
 
     const callData = this.userOp.callData as string;
@@ -260,7 +288,11 @@ export class ZkapBuilder extends BaseAccountBuilder {
     const iface = new ethers.Interface(ZkapAccountABI);
     const parsedTx = iface.parseTransaction({ data: callData });
     if (parsedTx?.name !== "execute" && parsedTx?.name !== "executeBatch") {
-      throw new Error(`Call data is not a valid ZkapAccount function call. Expected 'execute' or 'executeBatch', but found '${parsedTx?.name}'.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.ENCODE_PARSE_FAILED,
+        operation: "update_user_op_call_data_for_paymaster_erc20",
+        message: `Call data is not a valid ZkapAccount function call. Expected 'execute' or 'executeBatch', but found '${parsedTx?.name}'.`,
+      });
     }
 
     // Build callData for the transfer(address to, uint256 value) function call
@@ -305,30 +337,60 @@ export class ZkapBuilder extends BaseAccountBuilder {
   async autoFillUserOp(nonceKey?: bigint): Promise<this> {
     /* istanbul ignore next */
     if (!this.provider) {
-      throw new Error("Provider is not set. Please provide a valid RPC URL.");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_MISSING_DEPENDENCY,
+        operation: "auto_fill_user_op",
+        message: "Provider is not set. Please provide a valid RPC URL.",
+      });
     }
     if (
       !this.userOp.sender ||
       !ethers.isAddress(this.userOp.sender) ||
       this.userOp.sender === ethers.ZeroAddress
     ) {
-      throw new Error("Sender is not set or invalid. Please set a non-zero Ethereum address.");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_FIELD_NOT_SET,
+        operation: "auto_fill_user_op",
+        message: "Sender is not set or invalid. Please set a non-zero Ethereum address.",
+      });
     }
     if (!ethers.isAddress(this.entryPoint) || this.entryPoint === ethers.ZeroAddress) {
-      throw new Error("EntryPoint is invalid. Please provide a valid non-zero EntryPoint address.");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_ADDRESS,
+        operation: "auto_fill_user_op",
+        message: "EntryPoint is invalid. Please provide a valid non-zero EntryPoint address.",
+      });
     }
     if (!this.signerKeyTypes || this.signerKeyTypes.length === 0) {
-      throw new Error("signerKeyTypes is not set. Call setSignerKeyTypes() before autoFillUserOp()");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_FIELD_NOT_SET,
+        operation: "auto_fill_user_op",
+        message: "signerKeyTypes is not set. Call setSignerKeyTypes() before autoFillUserOp()",
+      });
     }
     const feeData = await this.provider.getFeeData();
     if (!feeData) {
-      throw new Error("Failed to get fee data from provider");
+      throw new AaFetchError({
+        code: AaFetchErrorCode.RESPONSE_SHAPE,
+        operation: "auto_fill_user_op",
+        service: "rpc",
+        url: this.enUrl,
+        method: "POST",
+        message: "Failed to get fee data from provider",
+      });
     }
     const maxFeePerGas = feeData.maxFeePerGas ?? feeData.gasPrice;
     const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas ?? feeData.gasPrice;
     /* istanbul ignore next */
     if (maxFeePerGas == null || maxPriorityFeePerGas == null) {
-      throw new Error("Failed to get fee data from provider");
+      throw new AaFetchError({
+        code: AaFetchErrorCode.RESPONSE_SHAPE,
+        operation: "auto_fill_user_op",
+        service: "rpc",
+        url: this.enUrl,
+        method: "POST",
+        message: "Failed to get fee data from provider",
+      });
     }
     if (this.userOp.nonce === undefined) {
       // Set nonce from entryPoint.getNonce(sender, nonceKey)
@@ -433,9 +495,11 @@ export class ZkapBuilder extends BaseAccountBuilder {
     /* istanbul ignore next */
     if (!this.paymasterService) {
       // error throw
-      throw new Error(
-        "Paymaster service is not set. Please set a valid paymaster service."
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_MISSING_DEPENDENCY,
+        operation: "auto_fill_paymaster_data",
+        message: "Paymaster service is not set. Please set a valid paymaster service.",
+      });
     }
 
     // Set paymaster verification and PostOp gas limits
@@ -494,7 +558,11 @@ export class ZkapBuilder extends BaseAccountBuilder {
     keys: { encodedMasterKey: string; encodedTxKey: string }
   ): this {
     if (!ethers.isAddress(zkapFactory)) {
-      throw new Error(`setInitCode: invalid factory address: "${zkapFactory}"`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_ADDRESS,
+        operation: "set_init_code",
+        message: `setInitCode: invalid factory address: "${zkapFactory}"`,
+      });
     }
     const { encodedMasterKey, encodedTxKey } = keys;
     const callDataBuilder = new CallDataBuilder(ZkapAccountFactoryABI);
@@ -544,7 +612,11 @@ export class ZkapBuilder extends BaseAccountBuilder {
    */
   setUpdateTxKeyCallData(encoded: string): this {
     if (!this.userOp.sender) {
-      throw new Error("Sender is not set");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_FIELD_NOT_SET,
+        operation: "set_update_tx_key_call_data",
+        message: "Sender is not set",
+      });
     }
     const callDataBuilder = new CallDataBuilder(ZkapAccountABI);
     const callData = callDataBuilder.encode("updateTxKey", [encoded]);
@@ -564,7 +636,11 @@ export class ZkapBuilder extends BaseAccountBuilder {
    */
   setUpdateMasterKeyCallData(encoded: string): this {
     if (!this.userOp.sender) {
-      throw new Error("Sender is not set");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_FIELD_NOT_SET,
+        operation: "set_update_master_key_call_data",
+        message: "Sender is not set",
+      });
     }
     const callDataBuilder = new CallDataBuilder(ZkapAccountABI);
     const callData = callDataBuilder.encode("updateMasterKey", [encoded]);
@@ -586,7 +662,11 @@ export class ZkapBuilder extends BaseAccountBuilder {
   setUpdateKeysCallData(keys: { encodedMasterKey: string; encodedTxKey: string }): this {
     const { encodedMasterKey, encodedTxKey } = keys;
     if (!this.userOp.sender) {
-      throw new Error("Sender is not set");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_FIELD_NOT_SET,
+        operation: "set_update_keys_call_data",
+        message: "Sender is not set",
+      });
     }
     const callDataBuilder = new CallDataBuilder(ZkapAccountABI);
     const callData = callDataBuilder.encode("updateKeys", [
@@ -684,9 +764,11 @@ export class ZkapBuilder extends BaseAccountBuilder {
    */
   setCallData(callData: string): this {
     if (!this.signerKeyTypes || this.signerKeyTypes.length === 0) {
-      throw new Error(
-        "Signer key types are not set. Please set a valid signer key types."
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.STATE_FIELD_NOT_SET,
+        operation: "set_call_data",
+        message: "Signer key types are not set. Please set a valid signer key types.",
+      });
     }
     super.setCallData(callData);
     return this;
@@ -699,7 +781,11 @@ export class ZkapBuilder extends BaseAccountBuilder {
    */
   setSignerKeyTypes(keyTypes: number[]): this {
     if (!Array.isArray(keyTypes) || keyTypes.length === 0) {
-      throw new Error("keyTypes must be a non-empty array");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_OUT_OF_RANGE,
+        operation: "set_signer_key_types",
+        message: "keyTypes must be a non-empty array",
+      });
     }
     const validKeyTypes = new Set<number>([
       PrimitiveAccountKeyTypes.keyAddress,
@@ -711,7 +797,11 @@ export class ZkapBuilder extends BaseAccountBuilder {
     ]);
     for (const kt of keyTypes) {
       if (!Number.isInteger(kt) || kt <= 0 || !validKeyTypes.has(kt)) {
-        throw new Error(`Invalid keyType: ${kt}. Allowed values: ${[...validKeyTypes].join(", ")}`);
+        throw new AaOperationError({
+          code: AaOperationErrorCode.INPUT_UNSUPPORTED,
+          operation: "set_signer_key_types",
+          message: `Invalid keyType: ${kt}. Allowed values: ${[...validKeyTypes].join(", ")}`,
+        });
       }
     }
     this.signerKeyTypes = keyTypes;

@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
 import { PackedUserOperation } from "../types/UserOperation";
+import { AaOperationError, AaOperationErrorCode } from "../errors";
 
 /**
  * Abstract base class for ERC-4337 smart accounts.
@@ -29,7 +30,11 @@ export abstract class BaseAccount {
    */
   constructor(address: string) {
     if (!ethers.isAddress(address)) {
-      throw new Error(`Invalid account address: "${address}"`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_ADDRESS,
+        operation: "init_base_account",
+        message: `Invalid account address: "${address}"`,
+      });
     }
     this.address = address;
   }

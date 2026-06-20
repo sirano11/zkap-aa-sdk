@@ -1,5 +1,7 @@
 import { ethers } from "ethers";
 
+import { AaOperationError, AaOperationErrorCode } from "../errors";
+
 export const BN254_FR =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 const MODULUS_BIT_SIZE = 254;
@@ -8,7 +10,11 @@ const LIMB_WIDTH = Math.floor((MODULUS_BIT_SIZE - 1) / 8); // = 31
 // NOTE: This is a custom SHA-256 block compression for ZK circuit intermediate state computation, not a general-purpose hash. Cannot be replaced by ethers.sha256.
 function sha256BlockCompress(data: Uint8Array): number[] {
   if (data.length % 64 !== 0) {
-    throw new Error("data length must be a multiple of 64 bytes");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.CRYPTO_INVALID_LENGTH,
+      operation: "sha256_block_compress",
+      message: "data length must be a multiple of 64 bytes",
+    });
   }
 
   // Start with initial hash values
@@ -25,14 +31,22 @@ function sha256BlockCompress(data: Uint8Array): number[] {
 
 function getOutOfCircuitHashSegment(jwt: string, keys: string[]): string {
   if (keys.length === 0) {
-    throw new Error("getOutOfCircuitHashSegment: keys must be a non-empty array");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.INPUT_OUT_OF_RANGE,
+      operation: "get_out_of_circuit_hash_segment",
+      message: "getOutOfCircuitHashSegment: keys must be a non-empty array",
+    });
   }
   const hashBlockSize = 64; // 512 bits
 
   // Split JWT by '.' delimiter (header, payload, signature)
   const parts = jwt.split(".");
   if (parts.length !== 3) {
-    throw new Error("Invalid JWT: must contain header, payload, and signature");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.SIGNER_JWT_INVALID,
+      operation: "get_out_of_circuit_hash_segment",
+      message: "Invalid JWT: must contain header, payload, and signature",
+    });
   }
   const [headerB64, payloadB64] = parts;
 
@@ -77,7 +91,11 @@ const rotateRight = (x: number, n: number): number =>
 function sha256BlockCompressWithState(state: number[], data: Uint8Array) {
   /* istanbul ignore next */
   if (data.length !== 64) {
-    throw new Error("data length must be 64 bytes");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.CRYPTO_INVALID_LENGTH,
+      operation: "sha256_block_compress_with_state",
+      message: "data length must be 64 bytes",
+    });
   }
 
   const w = new Uint32Array(64);
@@ -156,16 +174,22 @@ function getValueOffsetFromKey(payload: string, key: string): number {
 
   const match = regexPattern.exec(payload);
   if (!match) {
-    throw new Error(`Claim with key "${key}" not found in payload`);
+    throw new AaOperationError({
+      code: AaOperationErrorCode.CRYPTO_CLAIM_NOT_FOUND,
+      operation: "get_value_offset_from_key",
+      message: `Claim with key "${key}" not found in payload`,
+    });
   }
 
   // match[0] is the full matched string; match.groups?.value is the named capture group (value).
   const fullMatch = match[0];
   const valuePart = match.groups?.value;
   if (!valuePart) {
-    throw new Error(
-      `Value part not found in the matched string for key "${key}"`
-    );
+    throw new AaOperationError({
+      code: AaOperationErrorCode.CRYPTO_CLAIM_NOT_FOUND,
+      operation: "get_value_offset_from_key",
+      message: `Value part not found in the matched string for key "${key}"`,
+    });
   }
 
   // Calculate the index at which valuePart starts within the full matched string.
@@ -233,7 +257,11 @@ function getSignedMessageHash(message: string): string {
 
 function userSpecificVkParser(userVk: string[] | bigint[]): bigint[][] {
   if (userVk.length !== 16) {
-    throw new Error("userVk length must be 16");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.CRYPTO_INVALID_LENGTH,
+      operation: "user_specific_vk_parser",
+      message: "userVk length must be 16",
+    });
   }
 
   const g2Mu = [
@@ -271,7 +299,11 @@ function userSpecificVkParser(userVk: string[] | bigint[]): bigint[][] {
 
 function userSpecificVkToStringArray(userSpecificVk: bigint[][]): string[] {
   if (userSpecificVk.length !== 4) {
-    throw new Error("userSpecificVk must have 4 elements");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.CRYPTO_INVALID_LENGTH,
+      operation: "user_specific_vk_to_string_array",
+      message: "userSpecificVk must have 4 elements",
+    });
   }
 
   const [g2Mu, g2MuX, g2MuZ, vAcc] = userSpecificVk;
@@ -283,7 +315,11 @@ function userSpecificVkToStringArray(userSpecificVk: bigint[][]): string[] {
     g2MuZ.length !== 4 ||
     vAcc.length !== 4
   ) {
-    throw new Error("Each element in userSpecificVk must have 4 elements");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.CRYPTO_INVALID_LENGTH,
+      operation: "user_specific_vk_to_string_array",
+      message: "Each element in userSpecificVk must have 4 elements",
+    });
   }
 
   // Rearrange back to original order
@@ -317,7 +353,11 @@ function userSpecificVkToStringArray(userSpecificVk: bigint[][]): string[] {
 export function formattingModulorN(n: string | Uint8Array): string[] {
   const bytes = ethers.getBytes(n);
   if (bytes.length % 8 !== 0) {
-    throw new Error("Input length must be a multiple of 8");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.CRYPTO_INVALID_LENGTH,
+      operation: "formatting_modulor_n",
+      message: "Input length must be a multiple of 8",
+    });
   }
 
   const reversedBytes = bytes.slice().reverse();
@@ -386,9 +426,11 @@ function strToFieldsBN254(s: string): bigint[] {
 
   /* istanbul ignore next */
   if (bytes.length % LIMB_WIDTH !== 0) {
-    throw new Error(
-      `Input length (${bytes.length}) must be a multiple of ${LIMB_WIDTH}.`
-    );
+    throw new AaOperationError({
+      code: AaOperationErrorCode.CRYPTO_INVALID_LENGTH,
+      operation: "str_to_fields_b_n254",
+      message: `Input length (${bytes.length}) must be a multiple of ${LIMB_WIDTH}.`,
+    });
   }
 
   const out: bigint[] = [];

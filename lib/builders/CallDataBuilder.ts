@@ -1,5 +1,7 @@
 import { ethers } from "ethers";
 
+import { AaOperationError, AaOperationErrorCode } from "../errors";
+
 export class CallDataBuilder {
   private contractInterface: ethers.Interface;
 
@@ -15,7 +17,11 @@ export class CallDataBuilder {
    */
   public encode(methodName: string, params: any[]): string {
     if (!this.contractInterface.getFunction(methodName)) {
-      throw new Error(`Method ${methodName} not found in ABI.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.ENCODE_METHOD_NOT_IN_ABI,
+        operation: "encode",
+        message: `Method ${methodName} not found in ABI.`,
+      });
     }
     return this.contractInterface.encodeFunctionData(methodName, params);
   }
@@ -30,7 +36,11 @@ export class CallDataBuilder {
    */
   public decode(methodName: string, callData: string): any[] {
     if (!this.contractInterface.getFunction(methodName)) {
-      throw new Error(`Method ${methodName} not found in ABI.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.ENCODE_METHOD_NOT_IN_ABI,
+        operation: "decode",
+        message: `Method ${methodName} not found in ABI.`,
+      });
     }
     return this.contractInterface.decodeFunctionData(methodName, callData);
   }

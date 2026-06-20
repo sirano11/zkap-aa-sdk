@@ -3,6 +3,7 @@ import type { ChainRegistry, ChainConfig } from "../registry/ChainRegistry";
 import type { BundlerClient } from "../client/BundlerClient";
 import { AccountReader } from "../reader/AccountReader";
 import type { TxKeyInfo } from "../reader/AccountReader";
+import { AaFetchError, AaFetchErrorCode } from "../errors";
 import type { UserOpReceipt } from "../client/types";
 import type { IUserOpSigner } from "../utils/IUserOpSigner";
 import { ZkapBuilder } from "../builders/ZkapBuilder";
@@ -76,9 +77,15 @@ export class WalletHelper {
       const address = await factory["getAddress(uint256)"](saltBigInt);
       return address as string;
     } catch (err) {
-      throw new Error(
-        `WalletHelper.deriveAddress: failed to call getAddress on factory ${chainConfig.zkapFactory} for chainId ${chainId}: ${err instanceof Error ? err.message : String(err)}`
-      );
+      throw new AaFetchError({
+        code: AaFetchErrorCode.TRANSPORT,
+        operation: "derive_address",
+        service: "rpc",
+        url: chainConfig.rpcUrl,
+        method: "POST",
+        cause: err,
+        message: `WalletHelper.deriveAddress: failed to call getAddress on factory ${chainConfig.zkapFactory} for chainId ${chainId}: ${err instanceof Error ? err.message : String(err)}`,
+      });
     }
   }
 

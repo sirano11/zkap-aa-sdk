@@ -1,6 +1,6 @@
 import type { PackedUserOperation } from "../types/UserOperation";
 import type { BundlerProvider, UserOpReceipt, UserOpStatus } from "./types";
-import { BundlerError } from "./types";
+import { AaFetchError, AaFetchErrorCode } from "../errors";
 
 const DEFAULT_POLL_INTERVAL = 2000;
 const DEFAULT_TIMEOUT = 60000;
@@ -35,7 +35,7 @@ export class BundlerClient {
    * @param userOp - The fully constructed and signed packed UserOperation.
    * @param entryPoint - Address of the ERC-4337 EntryPoint contract.
    * @returns The UserOperation hash assigned by the bundler.
-   * @throws {@link BundlerError} if the bundler rejects the operation or a network error occurs.
+   * @throws {@link UserOpRevertError} if the chain rejects the op, or {@link AaFetchError} on a channel failure.
    */
   async submitUserOp(userOp: PackedUserOperation, entryPoint: string): Promise<string> {
     return this.provider.submitUserOp(userOp, entryPoint);
@@ -46,7 +46,7 @@ export class BundlerClient {
    *
    * @param userOpHash - The hash returned by {@link submitUserOp}.
    * @returns The current {@link UserOpStatus}.
-   * @throws {@link BundlerError} on network failure.
+   * @throws {@link AaFetchError} on a transport or HTTP failure.
    */
   async getStatus(userOpHash: string): Promise<UserOpStatus> {
     return this.provider.getStatus(userOpHash);
@@ -62,7 +62,7 @@ export class BundlerClient {
    * @param options.pollInterval - Milliseconds between status polls (default: 2000).
    * @param options.timeout - Maximum milliseconds to wait before throwing (default: 60000).
    * @returns The {@link UserOpReceipt} once the operation is finalized.
-   * @throws {@link BundlerError} with code `"BUNDLER_TIMEOUT"` if the deadline is exceeded.
+   * @throws {@link AaFetchError} (code TIMEOUT) if the deadline is exceeded.
    *
    * @example
    * ```ts
@@ -97,11 +97,13 @@ export class BundlerClient {
       await this._sleep(pollInterval);
     }
 
-    throw new BundlerError(
-      `UserOp ${userOpHash} not confirmed within ${timeout}ms`,
-      "BUNDLER_TIMEOUT",
-      false
-    );
+    throw new AaFetchError({
+      code: AaFetchErrorCode.TIMEOUT,
+      operation: "wait_for_receipt",
+      service: "bundler",
+      method: "GET",
+      message: `UserOp ${userOpHash} not confirmed within ${timeout}ms`,
+    });
   }
 
   private _buildReceipt(userOpHash: string, success: boolean): UserOpReceipt {

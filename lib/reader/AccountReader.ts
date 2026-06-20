@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
 import { PrimitiveAccountKeyTypes } from "../types/AccountKey";
+import { AaFetchError, AaFetchErrorCode } from "../errors";
 
 /**
  * Discriminated string union representing the cryptographic key scheme used
@@ -118,11 +119,13 @@ const KEY_TYPE_DETECTOR_ABI = [
  */
 export class AccountReader {
   private readonly provider: ethers.JsonRpcProvider;
+  private readonly rpcUrl: string;
 
   /**
    * @param config.rpcUrl - JSON-RPC endpoint URL for the target chain.
    */
   constructor(config: { rpcUrl: string; chainId?: number }) {
+    this.rpcUrl = config.rpcUrl;
     this.provider = new ethers.JsonRpcProvider(config.rpcUrl, undefined, {
       staticNetwork: config.chainId ? ethers.Network.from(config.chainId) : true,
     });
@@ -247,8 +250,16 @@ export class AccountReader {
       const entry = await account.masterKeyList(0);
       logic = entry[0] as string;
       keyId = entry[1] as bigint;
-    } catch {
-      throw new Error(`AccountReader: failed to read masterKeyList(0) for ${address}`);
+    } catch (err) {
+      throw new AaFetchError({
+        code: AaFetchErrorCode.TRANSPORT,
+        operation: "get_master_key_info",
+        service: "rpc",
+        url: this.rpcUrl,
+        method: "POST",
+        cause: err,
+        message: `AccountReader: failed to read masterKeyList(0) for ${address}`,
+      });
     }
 
     let threshold = 1;

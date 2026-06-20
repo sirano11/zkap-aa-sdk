@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
 import { ZkapAccountFactoryABI } from "../types/abi";
+import { AaOperationError, AaOperationErrorCode } from "../errors";
 
 /**
  * Thin wrapper around the on-chain `ZkapAccountFactory` contract that exposes
@@ -24,12 +25,20 @@ export class ZkapFactoryBuilder {
    */
   constructor(address: string, enUrl: string) {
     if (!ethers.isAddress(address)) {
-      throw new Error(`ZkapFactoryBuilder: invalid contract address: "${address}"`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_ADDRESS,
+        operation: "init_zkap_factory_builder",
+        message: `ZkapFactoryBuilder: invalid contract address: "${address}"`,
+      });
     }
     try {
       new URL(enUrl);
     } catch {
-      throw new Error(`Invalid enUrl: "${enUrl}". Must be a valid URL.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_URL,
+        operation: "init_zkap_factory_builder",
+        message: `Invalid enUrl: "${enUrl}". Must be a valid URL.`,
+      });
     }
     this.provider = new ethers.JsonRpcProvider(enUrl);
     this.accountFactory = new ethers.Contract(

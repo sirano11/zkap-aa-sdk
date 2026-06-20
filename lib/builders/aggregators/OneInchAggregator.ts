@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
 import { SwapParams, SwapTxData } from "../../types/Swap";
+import { AaOperationError, AaOperationErrorCode, AaFetchError, AaFetchErrorCode } from "../../errors";
 
 /**
  * 1inch DEX aggregator client that wraps the 1inch Swap API v6.0.
@@ -30,7 +31,11 @@ export class OneInchAggregator {
     this.apiBaseUrl = this.BASE_URL + chainId;
     const url = new URL(this.apiBaseUrl);
     if (url.protocol !== "https:") {
-      throw new Error("OneInchAggregator requires HTTPS");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_URL,
+        operation: "init_one_inch_aggregator",
+        message: "OneInchAggregator requires HTTPS",
+      });
     }
     this.apiKey = apiKey;
   }
@@ -89,13 +94,28 @@ export class OneInchAggregator {
     try {
       const response = await fetch(url, { method: "GET", headers: this.getHeaders(), signal: controller.signal });
       if (!response.ok) {
-        throw new Error(`Error fetching allowance: ${response.status} ${response.statusText}`);
+        throw new AaFetchError({
+          code: AaFetchErrorCode.HTTP_STATUS,
+          httpStatus: response.status,
+          operation: "check_allowance",
+          service: "swap_aggregator",
+          url: String(url),
+          method: "GET",
+          message: `Error fetching allowance: ${response.status} ${response.statusText}`,
+        });
       }
       const data = await response.json();
       return data.allowance ?? null;
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error(`Request timed out after ${OneInchAggregator.FETCH_TIMEOUT_MS}ms`);
+        throw new AaFetchError({
+          code: AaFetchErrorCode.TIMEOUT,
+          operation: "check_allowance",
+          service: "swap_aggregator",
+          url: String(url),
+          method: "GET",
+          message: `Request timed out after ${OneInchAggregator.FETCH_TIMEOUT_MS}ms`,
+        });
       }
       throw error;
     } finally {
@@ -136,9 +156,15 @@ export class OneInchAggregator {
       });
 
       if (!response.ok) {
-        throw new Error(
-          `HTTP Error! Status: ${response.status} - ${response.statusText}`
-        );
+        throw new AaFetchError({
+          code: AaFetchErrorCode.HTTP_STATUS,
+          httpStatus: response.status,
+          operation: "get_approval_tx_data",
+          service: "swap_aggregator",
+          url: String(url),
+          method: "GET",
+          message: `HTTP Error! Status: ${response.status} - ${response.statusText}`,
+        });
       }
 
       const transaction = await response.json();
@@ -146,10 +172,24 @@ export class OneInchAggregator {
       const approvalTo = transaction.to;
       const approvalData = transaction.data;
       if (!approvalTo || !ethers.isAddress(approvalTo)) {
-        throw new Error(`Invalid approval response: 'to' is not a valid address: ${approvalTo}`);
+        throw new AaFetchError({
+          code: AaFetchErrorCode.RESPONSE_SHAPE,
+          operation: "get_approval_tx_data",
+          service: "swap_aggregator",
+          url: String(url),
+          method: "GET",
+          message: `Invalid approval response: 'to' is not a valid address: ${approvalTo}`,
+        });
       }
       if (typeof approvalData !== 'string' || !/^0x([0-9a-fA-F]{2})*$/.test(approvalData)) {
-        throw new Error('Invalid approval response: data is not valid hex');
+        throw new AaFetchError({
+          code: AaFetchErrorCode.RESPONSE_SHAPE,
+          operation: "get_approval_tx_data",
+          service: "swap_aggregator",
+          url: String(url),
+          method: "GET",
+          message: 'Invalid approval response: data is not valid hex',
+        });
       }
       return {
         contractAddress: approvalTo,
@@ -158,7 +198,14 @@ export class OneInchAggregator {
       };
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error(`Request timed out after ${OneInchAggregator.FETCH_TIMEOUT_MS}ms`);
+        throw new AaFetchError({
+          code: AaFetchErrorCode.TIMEOUT,
+          operation: "get_approval_tx_data",
+          service: "swap_aggregator",
+          url: String(url),
+          method: "GET",
+          message: `Request timed out after ${OneInchAggregator.FETCH_TIMEOUT_MS}ms`,
+        });
       }
       throw error;
     } finally {
@@ -214,11 +261,25 @@ export class OneInchAggregator {
       if (!response.ok) {
         if (response.status === 400) {
           const errorData = await response.json();
-          throw new Error(`1inch API error (400): ${JSON.stringify(errorData)}`);
+          throw new AaFetchError({
+            code: AaFetchErrorCode.HTTP_STATUS,
+            httpStatus: response.status,
+            operation: "get_swap_tx_data",
+            service: "swap_aggregator",
+            url: String(url),
+            method: "GET",
+            message: `1inch API error (400): ${JSON.stringify(errorData)}`,
+          });
         }
-        throw new Error(
-          `HTTP Error! Status: ${response.status} - ${response.statusText}`
-        );
+        throw new AaFetchError({
+          code: AaFetchErrorCode.HTTP_STATUS,
+          httpStatus: response.status,
+          operation: "get_swap_tx_data",
+          service: "swap_aggregator",
+          url: String(url),
+          method: "GET",
+          message: `HTTP Error! Status: ${response.status} - ${response.statusText}`,
+        });
       }
 
       const transaction = await response.json();
@@ -226,10 +287,24 @@ export class OneInchAggregator {
       const swapTo = transaction.tx?.to;
       const swapData = transaction.tx?.data;
       if (!swapTo || !ethers.isAddress(swapTo)) {
-        throw new Error(`Invalid swap response: 'to' is not a valid address: ${swapTo}`);
+        throw new AaFetchError({
+          code: AaFetchErrorCode.RESPONSE_SHAPE,
+          operation: "get_swap_tx_data",
+          service: "swap_aggregator",
+          url: String(url),
+          method: "GET",
+          message: `Invalid swap response: 'to' is not a valid address: ${swapTo}`,
+        });
       }
       if (typeof swapData !== 'string' || !/^0x([0-9a-fA-F]{2})*$/.test(swapData)) {
-        throw new Error('Invalid swap response: data is not valid hex');
+        throw new AaFetchError({
+          code: AaFetchErrorCode.RESPONSE_SHAPE,
+          operation: "get_swap_tx_data",
+          service: "swap_aggregator",
+          url: String(url),
+          method: "GET",
+          message: 'Invalid swap response: data is not valid hex',
+        });
       }
       return {
         contractAddress: swapTo,
@@ -238,7 +313,14 @@ export class OneInchAggregator {
       };
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error(`Request timed out after ${OneInchAggregator.FETCH_TIMEOUT_MS}ms`);
+        throw new AaFetchError({
+          code: AaFetchErrorCode.TIMEOUT,
+          operation: "get_swap_tx_data",
+          service: "swap_aggregator",
+          url: String(url),
+          method: "GET",
+          message: `Request timed out after ${OneInchAggregator.FETCH_TIMEOUT_MS}ms`,
+        });
       }
       throw error;
     } finally {

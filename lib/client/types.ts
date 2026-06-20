@@ -64,7 +64,7 @@ export interface BundlerProvider {
    * @param userOp - The fully constructed and signed packed UserOperation.
    * @param entryPoint - Address of the ERC-4337 EntryPoint contract.
    * @returns The UserOperation hash assigned by the bundler.
-   * @throws {@link BundlerError} if the bundler rejects the operation or a network error occurs.
+   * @throws {@link UserOpRevertError} if the chain rejects the op, or {@link AaFetchError} on a channel failure.
    */
   submitUserOp(userOp: PackedUserOperation, entryPoint: string): Promise<string>;
 
@@ -73,7 +73,7 @@ export interface BundlerProvider {
    *
    * @param userOpHash - The hash returned by {@link submitUserOp}.
    * @returns The current {@link UserOpStatus}.
-   * @throws {@link BundlerError} on network failure.
+   * @throws {@link AaFetchError} on a transport or HTTP failure.
    */
   getStatus(userOpHash: string): Promise<UserOpStatus>;
 
@@ -82,58 +82,7 @@ export interface BundlerProvider {
    *
    * @param userOpHash - The hash returned by {@link submitUserOp}.
    * @returns The {@link UserOpReceipt}, or `null` if the operation is not yet finalized.
-   * @throws {@link BundlerError} on network failure.
+   * @throws {@link AaFetchError} on a transport or HTTP failure.
    */
   getReceipt(userOpHash: string): Promise<UserOpReceipt | null>;
-}
-
-/**
- * Machine-readable error codes surfaced by {@link BundlerError}.
- *
- * - `"AA21_INSUFFICIENT_FUNDS"` — account balance too low to cover gas (ERC-4337 AA21).
- * - `"AA25_NONCE_ERROR"` — UserOp nonce is invalid or already used (ERC-4337 AA25).
- * - `"AA40_PAYMASTER_ERROR"` — paymaster validation failed (ERC-4337 AA31/AA32/AA40/AA41).
- * - `"BUNDLER_TIMEOUT"` — confirmation was not received within the allotted time.
- * - `"BUNDLER_REJECTED"` — bundler rejected the UserOp for an unclassified reason.
- * - `"NETWORK_ERROR"` — a transient network or connectivity failure occurred.
- */
-export type BundlerErrorCode =
-  | "AA21_INSUFFICIENT_FUNDS"
-  | "AA25_NONCE_ERROR"
-  | "AA40_PAYMASTER_ERROR"
-  | "BUNDLER_TIMEOUT"
-  | "BUNDLER_REJECTED"
-  | "NETWORK_ERROR";
-
-/**
- * Structured error thrown by {@link BundlerClient} and {@link BundlerProvider} implementations.
- *
- * @example
- * ```ts
- * try {
- *   await client.submitUserOp(userOp, entryPoint);
- * } catch (err) {
- *   if (err instanceof BundlerError && err.retryable) {
- *     // safe to retry
- *   }
- * }
- * ```
- */
-export class BundlerError extends Error {
-  /** Machine-readable error classification. */
-  code: BundlerErrorCode;
-  /** Whether the operation may succeed if retried (e.g. transient network errors). */
-  retryable: boolean;
-
-  /**
-   * @param message - Human-readable error description.
-   * @param code - Machine-readable error code for programmatic handling.
-   * @param retryable - Set to `true` for transient errors that may succeed on retry.
-   */
-  constructor(message: string, code: BundlerErrorCode, retryable = false) {
-    super(message);
-    this.name = "BundlerError";
-    this.code = code;
-    this.retryable = retryable;
-  }
 }

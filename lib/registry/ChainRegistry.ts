@@ -1,3 +1,5 @@
+import { AaFetchError, AaFetchErrorCode } from "../errors";
+
 /**
  * On-chain and off-chain configuration for a supported EVM chain within the ZKAP ecosystem.
  *
@@ -98,13 +100,27 @@ export class ChainRegistry {
     try {
       res = await fetch(url);
     } catch (err) {
-      throw new Error(
-        `ChainRegistry: network error fetching chainId ${chainId}: ${err instanceof Error ? err.message : String(err)}`
-      );
+      throw new AaFetchError({
+        code: AaFetchErrorCode.TRANSPORT,
+        operation: "get_chain_config",
+        service: "chain_registry",
+        url,
+        method: "GET",
+        cause: err,
+        message: `ChainRegistry: network error fetching chainId ${chainId}: ${err instanceof Error ? err.message : String(err)}`,
+      });
     }
 
     if (!res.ok) {
-      throw new Error(`ChainRegistry: failed to fetch chainId ${chainId} (HTTP ${res.status})`);
+      throw new AaFetchError({
+        code: AaFetchErrorCode.HTTP_STATUS,
+        httpStatus: res.status,
+        operation: "get_chain_config",
+        service: "chain_registry",
+        url,
+        method: "GET",
+        message: `ChainRegistry: failed to fetch chainId ${chainId} (HTTP ${res.status})`,
+      });
     }
 
     const data = await res.json() as Record<string, unknown>;
@@ -143,13 +159,27 @@ export class ChainRegistry {
     try {
       res = await fetch(url);
     } catch (err) {
-      throw new Error(
-        `ChainRegistry: network error fetching supported chains: ${err instanceof Error ? err.message : String(err)}`
-      );
+      throw new AaFetchError({
+        code: AaFetchErrorCode.TRANSPORT,
+        operation: "get_supported_chains",
+        service: "chain_registry",
+        url,
+        method: "GET",
+        cause: err,
+        message: `ChainRegistry: network error fetching supported chains: ${err instanceof Error ? err.message : String(err)}`,
+      });
     }
 
     if (!res.ok) {
-      throw new Error(`ChainRegistry: failed to fetch supported chains (HTTP ${res.status})`);
+      throw new AaFetchError({
+        code: AaFetchErrorCode.HTTP_STATUS,
+        httpStatus: res.status,
+        operation: "get_supported_chains",
+        service: "chain_registry",
+        url,
+        method: "GET",
+        message: `ChainRegistry: failed to fetch supported chains (HTTP ${res.status})`,
+      });
     }
 
     const data = await res.json() as Record<string, unknown> | unknown[];
@@ -193,16 +223,44 @@ export class ChainRegistry {
     const zkapFactory = String(data.zkapFactory || data.factory || "");
 
     if (!chainId || isNaN(chainId)) {
-      throw new Error(`ChainRegistry: invalid or missing chainId in API response: ${JSON.stringify(data.chainId)}`);
+      throw new AaFetchError({
+        code: AaFetchErrorCode.RESPONSE_SHAPE,
+        operation: "parse_chain_config",
+        service: "chain_registry",
+        url: this.apiUrl,
+        method: "GET",
+        message: `ChainRegistry: invalid or missing chainId in API response: ${JSON.stringify(data.chainId)}`,
+      });
     }
     if (!rpcUrl) {
-      throw new Error(`ChainRegistry: missing rpcUrl for chainId ${chainId}`);
+      throw new AaFetchError({
+        code: AaFetchErrorCode.RESPONSE_SHAPE,
+        operation: "parse_chain_config",
+        service: "chain_registry",
+        url: this.apiUrl,
+        method: "GET",
+        message: `ChainRegistry: missing rpcUrl for chainId ${chainId}`,
+      });
     }
     if (!entryPoint) {
-      throw new Error(`ChainRegistry: missing entryPoint for chainId ${chainId}`);
+      throw new AaFetchError({
+        code: AaFetchErrorCode.RESPONSE_SHAPE,
+        operation: "parse_chain_config",
+        service: "chain_registry",
+        url: this.apiUrl,
+        method: "GET",
+        message: `ChainRegistry: missing entryPoint for chainId ${chainId}`,
+      });
     }
     if (!zkapFactory) {
-      throw new Error(`ChainRegistry: missing zkapFactory for chainId ${chainId}`);
+      throw new AaFetchError({
+        code: AaFetchErrorCode.RESPONSE_SHAPE,
+        operation: "parse_chain_config",
+        service: "chain_registry",
+        url: this.apiUrl,
+        method: "GET",
+        message: `ChainRegistry: missing zkapFactory for chainId ${chainId}`,
+      });
     }
 
     return {

@@ -3,11 +3,13 @@ import { IUserOpSigner } from "../utils/IUserOpSigner";
 import { ethers } from "ethers";
 import EntryPoint from "../types/abi/EntryPoint.json";
 import { PackedUserOperation } from "../types/UserOperation";
+import { AaOperationError, AaOperationErrorCode, AaFetchError, AaFetchErrorCode } from "../errors";
 
 export class ZkapAccount extends BaseAccount {
   private signer: IUserOpSigner;
   private provider: ethers.JsonRpcProvider;
   private entryPoint: ethers.Contract;
+  private readonly enUrl: string;
 
   constructor(
     address: string,
@@ -17,14 +19,23 @@ export class ZkapAccount extends BaseAccount {
   ) {
     super(address);
     if (!ethers.isAddress(entryPointAddress) || entryPointAddress === ethers.ZeroAddress) {
-      throw new Error(`Invalid entryPointAddress: "${entryPointAddress}". Must be a non-zero Ethereum address.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_ADDRESS,
+        operation: "init_zkap_account",
+        message: `Invalid entryPointAddress: "${entryPointAddress}". Must be a non-zero Ethereum address.`,
+      });
     }
     this.signer = signer;
     try {
       new URL(enUrl);
     } catch {
-      throw new Error(`Invalid enUrl: "${enUrl}". Must be a valid URL.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_URL,
+        operation: "init_zkap_account",
+        message: `Invalid enUrl: "${enUrl}". Must be a valid URL.`,
+      });
     }
+    this.enUrl = enUrl;
     this.provider = new ethers.JsonRpcProvider(enUrl);
     this.entryPoint = new ethers.Contract(
       entryPointAddress,
@@ -42,13 +53,17 @@ export class ZkapAccount extends BaseAccount {
       const nonce = await this.entryPoint.getNonce(this.address, nonceKey);
       return nonce;
     } catch (error) {
-      throw Object.assign(
-        new Error(
+      throw new AaFetchError({
+        code: AaFetchErrorCode.TRANSPORT,
+        operation: "get_nonce",
+        service: "rpc",
+        url: this.enUrl,
+        method: "POST",
+        cause: error,
+        message:
           `Failed to fetch nonce from entryPoint for account ${this.address} (nonceKey=${nonceKey.toString()}): ` +
-          `${error instanceof Error ? error.message : String(error)}`
-        ),
-        { cause: error }
-      );
+          `${error instanceof Error ? error.message : String(error)}`,
+      });
     }
   }
 
@@ -76,7 +91,14 @@ export class ZkapAccount extends BaseAccount {
       entryPointAddress,
     ]);
     if (typeof userOpHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(userOpHash)) {
-      throw new Error(`Bundler returned invalid userOpHash: ${userOpHash}`);
+      throw new AaFetchError({
+        code: AaFetchErrorCode.RESPONSE_SHAPE,
+        operation: "send_transaction",
+        service: "bundler",
+        url: this.enUrl,
+        method: "POST",
+        message: `Bundler returned invalid userOpHash: ${userOpHash}`,
+      });
     }
     return userOpHash;
   }

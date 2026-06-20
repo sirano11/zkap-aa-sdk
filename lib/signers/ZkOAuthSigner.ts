@@ -6,6 +6,7 @@ import AccountKeyZkOAuthRS256VerifierJson from "../types/abi/AccountKeyZkOAuthRS
 import poseidonMerkleTreeDirectoryJson from "../types/abi/PoseidonMerkleTreeDirectory.json";
 import { JwkKey, JwtHeader } from "../types/jwk";
 import { PrimitiveAccountKeyTypes } from "../types/AccountKey";
+import { AaOperationError, AaOperationErrorCode, AaFetchError, AaFetchErrorCode } from "../errors";
 
 const JWKS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 // NOTE: Module-level cache shared across ZkPasskeySigner instances. Use clearJwksCache() for testing.
@@ -23,7 +24,11 @@ export function clearJwksCache(): void {
 function decodeJwtHeader(token: string): JwtHeader {
   const parts = token.split(".");
   if (parts.length !== 3) {
-    throw new Error(`Invalid JWT format: expected 3 parts, got ${parts.length}`);
+    throw new AaOperationError({
+      code: AaOperationErrorCode.SIGNER_JWT_INVALID,
+      operation: "decode_jwt_header",
+      message: `Invalid JWT format: expected 3 parts, got ${parts.length}`,
+    });
   }
   const [headerB64] = parts;
   // JWT uses base64url (- instead of +, _ instead of /, no padding)
@@ -32,10 +37,18 @@ function decodeJwtHeader(token: string): JwtHeader {
   const headerJson = Buffer.from(padded, "base64").toString("utf8");
   const header = JSON.parse(headerJson) as JwtHeader;
   if (!header.kid) {
-    throw new Error("JWT header missing required field: kid");
+    throw new AaOperationError({
+      code: AaOperationErrorCode.SIGNER_JWT_INVALID,
+      operation: "decode_jwt_header",
+      message: "JWT header missing required field: kid",
+    });
   }
   if (header.alg !== "RS256") {
-    throw new Error(`Unsupported JWT algorithm: ${header.alg}. Only RS256 is supported.`);
+    throw new AaOperationError({
+      code: AaOperationErrorCode.SIGNER_JWT_INVALID,
+      operation: "decode_jwt_header",
+      message: `Unsupported JWT algorithm: ${header.alg}. Only RS256 is supported.`,
+    });
   }
   return header;
 }
@@ -48,23 +61,50 @@ async function getOAuthPublicKey(jwksUrl: string, kid: string): Promise<string> 
   }
   const response = await fetch(jwksUrl);
   if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`);
+    throw new AaFetchError({
+      code: AaFetchErrorCode.HTTP_STATUS,
+      httpStatus: response.status,
+      operation: "get_o_auth_public_key",
+      service: "jwks",
+      url: jwksUrl,
+      method: "GET",
+      message: `HTTP error! status: ${response.status}`,
+    });
   }
   const data = await response.json();
   if (!data || !Array.isArray(data.keys)) {
-    throw new Error("Invalid JWKS response: missing or malformed 'keys' array");
+    throw new AaFetchError({
+      code: AaFetchErrorCode.RESPONSE_SHAPE,
+      operation: "get_o_auth_public_key",
+      service: "jwks",
+      url: jwksUrl,
+      method: "GET",
+      message: "Invalid JWKS response: missing or malformed 'keys' array",
+    });
   }
   const keys: JwkKey[] = data.keys;
   const key = keys.find((key) => key.kid === kid && key.kty === "RSA" && key.use === "sig" && key.alg === "RS256");
   if (!key || typeof key.n !== 'string' || key.n.length === 0) {
-    throw new Error(`No valid JWK found for kid: ${kid}`);
+    throw new AaOperationError({
+      code: AaOperationErrorCode.SIGNER_JWKS_INVALID,
+      operation: "get_o_auth_public_key",
+      message: `No valid JWK found for kid: ${kid}`,
+    });
   }
   // Validate minimum RSA modulus length: 2048-bit = 256 bytes ≈ 342 base64url chars
   if (key.n.length < 300) {
-    throw new Error(`RSA modulus too short for kid: ${kid}. Minimum 2048-bit key required.`);
+    throw new AaOperationError({
+      code: AaOperationErrorCode.SIGNER_JWKS_INVALID,
+      operation: "get_o_auth_public_key",
+      message: `RSA modulus too short for kid: ${kid}. Minimum 2048-bit key required.`,
+    });
   }
   if (typeof key.e !== 'string' || key.e.length === 0) {
-    throw new Error(`Missing public exponent (e) for kid: ${kid}`);
+    throw new AaOperationError({
+      code: AaOperationErrorCode.SIGNER_JWKS_INVALID,
+      operation: "get_o_auth_public_key",
+      message: `Missing public exponent (e) for kid: ${kid}`,
+    });
   }
   if (jwksCache.size >= MAX_JWKS_CACHE_SIZE) {
     const oldestKey = jwksCache.keys().next().value;
@@ -109,6 +149,7 @@ export class ZkOAuthSigner implements IUserOpSigner {
   public readonly keyTypes: number[] = [PrimitiveAccountKeyTypes.keyZkOAuthRS256];
   private static readonly PROOF_SERVER_TIMEOUT_MS = 30_000;
   private proofServerUrl: string;
+  private readonly enUrl: string;
   private zkapAddress: string;
   private provider: ethers.JsonRpcProvider;
   private zkapAccount: ethers.Contract | undefined;
@@ -137,48 +178,77 @@ export class ZkOAuthSigner implements IUserOpSigner {
     zkapN: number
   ) {
     if (socialServices.length !== idTokenGenerators.length) {
-      throw new Error("socialServices.length !== idTokenGenerators.length");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_THRESHOLD_INVALID,
+        operation: "init_zk_o_auth_signer",
+        message: "socialServices.length !== idTokenGenerators.length",
+      });
     }
     if (socialServices.length > 3) {
-      throw new Error("socialServices.length must be <= 3 (max 3 OAuth providers supported)");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_THRESHOLD_INVALID,
+        operation: "init_zk_o_auth_signer",
+        message: "socialServices.length must be <= 3 (max 3 OAuth providers supported)",
+      });
     }
     if (zkapN <= 0 || zkapN > 3) {
-      throw new Error("zkapN must be between 1 and 3");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_THRESHOLD_INVALID,
+        operation: "init_zk_o_auth_signer",
+        message: "zkapN must be between 1 and 3",
+      });
     }
     if (zkapK < 1 || zkapK > zkapN) {
-      throw new Error(`zkapK must be between 1 and zkapN (got zkapK=${zkapK}, zkapN=${zkapN})`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_THRESHOLD_INVALID,
+        operation: "init_zk_o_auth_signer",
+        message: `zkapK must be between 1 and zkapN (got zkapK=${zkapK}, zkapN=${zkapN})`,
+      });
     }
     if (zkapK !== 1) {
-      throw new Error(
-        `ZkOAuthSigner currently supports only zkapK=1 (got zkapK=${zkapK}). ` +
-        "For k>1 threshold proofs, use a signer path that provides multi-proof payloads."
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_THRESHOLD_INVALID,
+        operation: "init_zk_o_auth_signer",
+        message:
+          `ZkOAuthSigner currently supports only zkapK=1 (got zkapK=${zkapK}). ` +
+          "For k>1 threshold proofs, use a signer path that provides multi-proof payloads.",
+      });
     }
     if (socialServices.length !== zkapN) {
-      throw new Error(
-        `socialServices.length (${socialServices.length}) must equal zkapN (${zkapN}). Each OAuth provider corresponds to one selector slot.`
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_THRESHOLD_INVALID,
+        operation: "init_zk_o_auth_signer",
+        message: `socialServices.length (${socialServices.length}) must equal zkapN (${zkapN}). Each OAuth provider corresponds to one selector slot.`,
+      });
     }
 
     // Enforce HTTPS for proof server (except localhost and private network addresses)
     const proofUrl = new URL(proofServerUrl);
     if (proofUrl.protocol !== 'https:' && !ZkOAuthSigner._isLocalOrPrivateHost(proofUrl.hostname)) {
-      throw new Error(
-        'proofServerUrl must use HTTPS. HTTP is only allowed for localhost, 127.0.0.1, ' +
-        'RFC1918 private addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x), and .local domains.'
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_URL,
+        operation: "init_zk_o_auth_signer",
+        message:
+          'proofServerUrl must use HTTPS. HTTP is only allowed for localhost, 127.0.0.1, ' +
+          'RFC1918 private addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x), and .local domains.',
+      });
     }
 
     const validSocialServices = new Set(['google', 'kakao']);
     for (const service of socialServices) {
       if (!validSocialServices.has(service)) {
-        throw new Error(`Unsupported social service: "${service}". Supported: google, kakao`);
+        throw new AaOperationError({
+          code: AaOperationErrorCode.SIGNER_UNSUPPORTED,
+          operation: "init_zk_o_auth_signer",
+          message: `Unsupported social service: "${service}". Supported: google, kakao`,
+        });
       }
     }
 
     this.socialServices = socialServices;
     this.idTokenGenerators = idTokenGenerators;
     this.proofServerUrl = proofServerUrl;
+    this.enUrl = enUrl;
     this.zkapAddress = zkapAddress;
     this.provider = new ethers.JsonRpcProvider(enUrl);
     this.poseidonMerkleTreeDirectoryAddress =
@@ -215,7 +285,14 @@ export class ZkOAuthSigner implements IUserOpSigner {
     const masterKeyRef = await this.zkapAccount.masterKeyList(0);
     const masterKeyAddress: string = masterKeyRef.logic;
     if (!masterKeyAddress || masterKeyAddress === ethers.ZeroAddress) {
-      throw new Error("masterKeyList returned invalid logic address (zero address)");
+      throw new AaFetchError({
+        code: AaFetchErrorCode.RESPONSE_SHAPE,
+        operation: "do_init",
+        service: "rpc",
+        url: this.enUrl,
+        method: "POST",
+        message: "masterKeyList returned invalid logic address (zero address)",
+      });
     }
     this.masterKeyId = masterKeyRef.keyId;
 
@@ -251,7 +328,11 @@ export class ZkOAuthSigner implements IUserOpSigner {
     merklePaths: string[][]
   ): Promise<string[]> {
     if (!this.poseidonMerkleTreeDirectory) {
-      throw new Error("poseidonMerkleTreeDirectory is not initialized");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_NOT_INITIALIZED,
+        operation: "get_signatures",
+        message: "poseidonMerkleTreeDirectory is not initialized",
+      });
     }
 
     const rootHex = await this.poseidonMerkleTreeDirectory.getRoot();
@@ -265,11 +346,19 @@ export class ZkOAuthSigner implements IUserOpSigner {
     let proofAndPublicInput: { proof: string[]; publicInputs: string[] };
 
     if (idTokens.length === 0 || idTokens.length > 3) {
-      throw new Error(`Invalid idTokens count: ${idTokens.length}. Must be 1, 2, or 3.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_OUT_OF_RANGE,
+        operation: "get_signatures",
+        message: `Invalid idTokens count: ${idTokens.length}. Must be 1, 2, or 3.`,
+      });
     }
     // Validate array length consistency
     if (jwtPks.length !== idTokens.length || leafIndices.length !== idTokens.length || merklePaths.length !== idTokens.length) {
-      throw new Error(`Array length mismatch: idTokens(${idTokens.length}), jwtPks(${jwtPks.length}), leafIndices(${leafIndices.length}), merklePaths(${merklePaths.length}) must all match.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_OUT_OF_RANGE,
+        operation: "get_signatures",
+        message: `Array length mismatch: idTokens(${idTokens.length}), jwtPks(${jwtPks.length}), leafIndices(${leafIndices.length}), merklePaths(${merklePaths.length}) must all match.`,
+      });
     }
 
     // The ZK proof circuit always receives 3 slots.
@@ -302,7 +391,11 @@ export class ZkOAuthSigner implements IUserOpSigner {
     const MIN_VALID_EPOCH = 1704067200;
     /* istanbul ignore next */
     if (now < MIN_VALID_EPOCH) {
-      throw new Error(`System clock appears incorrect: timestamp ${now} is before 2024-01-01. Check device time settings.`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID,
+        operation: "get_signatures",
+        message: `System clock appears incorrect: timestamp ${now} is before 2024-01-01. Check device time settings.`,
+      });
     }
     // Current time (Unix timestamp) sent to the proof server. Field name 'exp' is kept to match server API spec.
     const exp = now.toString();
@@ -330,7 +423,14 @@ export class ZkOAuthSigner implements IUserOpSigner {
         });
       } catch (fetchError) {
         if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-          throw new Error(`Proof server request timed out after ${ZkOAuthSigner.PROOF_SERVER_TIMEOUT_MS}ms`);
+          throw new AaFetchError({
+            code: AaFetchErrorCode.TIMEOUT,
+            operation: "get_signatures",
+            service: "proof_server",
+            url: `${this.proofServerUrl}/proof2`,
+            method: "POST",
+            message: `Proof server request timed out after ${ZkOAuthSigner.PROOF_SERVER_TIMEOUT_MS}ms`,
+          });
         }
         throw fetchError;
       } finally {
@@ -340,34 +440,66 @@ export class ZkOAuthSigner implements IUserOpSigner {
       if (!fetchResponse.ok) {
         let errorBody = '';
         try { errorBody = await fetchResponse.text(); } catch { /* ignore */ }
-        throw new Error(`Proof server error! status: ${fetchResponse.status}${errorBody ? `: ${errorBody}` : ''}`);
+        throw new AaFetchError({
+          code: AaFetchErrorCode.HTTP_STATUS,
+          httpStatus: fetchResponse.status,
+          operation: "get_signatures",
+          service: "proof_server",
+          url: `${this.proofServerUrl}/proof2`,
+          method: "POST",
+          message: `Proof server error! status: ${fetchResponse.status}${errorBody ? `: ${errorBody}` : ''}`,
+        });
       }
       proofAndPublicInput = await fetchResponse.json();
 
       // Validate proof server response
       if (!Array.isArray(proofAndPublicInput.proof) || proofAndPublicInput.proof.length !== 8) {
-        throw new Error(`Invalid proof server response: proof must be an array of 8 elements, got ${proofAndPublicInput.proof?.length}`);
+        throw new AaOperationError({
+          code: AaOperationErrorCode.SIGNER_PROOF_INVALID,
+          operation: "get_signatures",
+          message: `Invalid proof server response: proof must be an array of 8 elements, got ${proofAndPublicInput.proof?.length}`,
+        });
       }
       if (!Array.isArray(proofAndPublicInput.publicInputs) || proofAndPublicInput.publicInputs.length !== 8) {
-        throw new Error(`Invalid proof server response: publicInputs must be an array of 8 elements, got ${proofAndPublicInput.publicInputs?.length}`);
+        throw new AaOperationError({
+          code: AaOperationErrorCode.SIGNER_PROOF_INVALID,
+          operation: "get_signatures",
+          message: `Invalid proof server response: publicInputs must be an array of 8 elements, got ${proofAndPublicInput.publicInputs?.length}`,
+        });
       }
       // Validate BN254 scalar field range (same validation as ZkOidcSigner.setProofData)
       for (let i = 0; i < proofAndPublicInput.proof.length; i++) {
         let val: bigint;
         try { val = BigInt(proofAndPublicInput.proof[i]); } catch {
-          throw new Error(`proof[${i}] is not a valid number: ${proofAndPublicInput.proof[i]}`);
+          throw new AaOperationError({
+            code: AaOperationErrorCode.SIGNER_PROOF_INVALID,
+            operation: "get_signatures",
+            message: `proof[${i}] is not a valid number: ${proofAndPublicInput.proof[i]}`,
+          });
         }
         if (val < 0n || val >= BN254_FR) {
-          throw new Error(`proof[${i}] is out of BN254 scalar field range`);
+          throw new AaOperationError({
+            code: AaOperationErrorCode.CRYPTO_FIELD_RANGE,
+            operation: "get_signatures",
+            message: `proof[${i}] is out of BN254 scalar field range`,
+          });
         }
       }
       for (let i = 0; i < proofAndPublicInput.publicInputs.length; i++) {
         let val: bigint;
         try { val = BigInt(proofAndPublicInput.publicInputs[i]); } catch {
-          throw new Error(`publicInputs[${i}] is not a valid number: ${proofAndPublicInput.publicInputs[i]}`);
+          throw new AaOperationError({
+            code: AaOperationErrorCode.SIGNER_PROOF_INVALID,
+            operation: "get_signatures",
+            message: `publicInputs[${i}] is not a valid number: ${proofAndPublicInput.publicInputs[i]}`,
+          });
         }
         if (val < 0n || val >= BN254_FR) {
-          throw new Error(`publicInputs[${i}] is out of BN254 scalar field range`);
+          throw new AaOperationError({
+            code: AaOperationErrorCode.CRYPTO_FIELD_RANGE,
+            operation: "get_signatures",
+            message: `publicInputs[${i}] is out of BN254 scalar field range`,
+          });
         }
       }
 
@@ -408,24 +540,52 @@ export class ZkOAuthSigner implements IUserOpSigner {
    */
   async prepareIdToken(userOpHash: string, index: number): Promise<string[]> {
     if (this._prepareInProgress) {
-      throw new Error("prepareIdToken: concurrent calls are not allowed. Await the previous call before calling again.");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_STATE_CONFLICT,
+        operation: "prepare_id_token",
+        message: "prepareIdToken: concurrent calls are not allowed. Await the previous call before calling again.",
+      });
     }
     this._prepareInProgress = true;
     try {
-      if (!this.idTokens) throw new Error("idTokens is not initialized");
+      if (!this.idTokens) {
+        throw new AaOperationError({
+          code: AaOperationErrorCode.SIGNER_NOT_INITIALIZED,
+          operation: "prepare_id_token",
+          message: "idTokens is not initialized",
+        });
+      }
       if (!Number.isInteger(index) || index < 0 || index >= this.idTokens.length)
-        throw new Error(`index is out of range: must be a non-negative integer less than ${this.idTokens.length}, got ${index}`);
+        throw new AaOperationError({
+          code: AaOperationErrorCode.INPUT_OUT_OF_RANGE,
+          operation: "prepare_id_token",
+          message: `index is out of range: must be a non-negative integer less than ${this.idTokens.length}, got ${index}`,
+        });
       if (!this.isInitialized) {
         await this.init();
       }
       if (this.preparedUserOpHash !== undefined && this.preparedUserOpHash !== userOpHash) {
-        throw new Error("[zkap-aa-sdk] prepareIdToken: userOpHash changed. Previous idTokens may be stale.");
+        throw new AaOperationError({
+          code: AaOperationErrorCode.SIGNER_STATE_CONFLICT,
+          operation: "prepare_id_token",
+          message: "[zkap-aa-sdk] prepareIdToken: userOpHash changed. Previous idTokens may be stale.",
+        });
       }
       this.preparedUserOpHash = userOpHash;
       if (!this.idTokenGenerators[index])
-        throw new Error("idTokenGenerator undefined");
+        throw new AaOperationError({
+          code: AaOperationErrorCode.SIGNER_NOT_INITIALIZED,
+          operation: "prepare_id_token",
+          message: "idTokenGenerator undefined",
+        });
       const idToken = await this.idTokenGenerators[index](userOpHash);
-      if (!idToken) throw new Error("idToken is undefined");
+      if (!idToken) {
+        throw new AaOperationError({
+          code: AaOperationErrorCode.SIGNER_NOT_INITIALIZED,
+          operation: "prepare_id_token",
+          message: "idToken is undefined",
+        });
+      }
 
       this.idTokens[index] = idToken;
       return this.idTokens;
@@ -436,33 +596,53 @@ export class ZkOAuthSigner implements IUserOpSigner {
 
   async signUserOpHash(userOpHash: string): Promise<string[]> {
     if (this.preparedUserOpHash === undefined) {
-      throw new Error(
-        "prepareIdToken() must be called before signUserOpHash(). Call prepareIdToken(userOpHash) first."
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_NOT_INITIALIZED,
+        operation: "sign_user_op_hash",
+        message: "prepareIdToken() must be called before signUserOpHash(). Call prepareIdToken(userOpHash) first.",
+      });
     }
     // H-2: Validate userOpHash format (32-byte hex, 66 chars)
     if (!/^0x[0-9a-fA-F]{64}$/.test(userOpHash)) {
-      throw new Error(
-        `signUserOpHash: userOpHash must be a 0x-prefixed 32-byte hex string (66 chars), got: ${userOpHash}`
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_FORMAT,
+        operation: "sign_user_op_hash",
+        message: `signUserOpHash: userOpHash must be a 0x-prefixed 32-byte hex string (66 chars), got: ${userOpHash}`,
+      });
     }
     if (!this.isInitialized) {
       await this.init();
     }
     if (userOpHash !== this.preparedUserOpHash) {
-      throw new Error(
-        `signUserOpHash: userOpHash mismatch. Expected ${this.preparedUserOpHash}, got ${userOpHash}. Call prepareIdToken() with the correct userOpHash first.`
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_STATE_CONFLICT,
+        operation: "sign_user_op_hash",
+        message: `signUserOpHash: userOpHash mismatch. Expected ${this.preparedUserOpHash}, got ${userOpHash}. Call prepareIdToken() with the correct userOpHash first.`,
+      });
     }
     // Verify that all this.idTokens entries are initialized
-    if (!this.idTokens) throw new Error("idTokens is undefined");
+    if (!this.idTokens) {
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_NOT_INITIALIZED,
+        operation: "sign_user_op_hash",
+        message: "idTokens is undefined",
+      });
+    }
     if (!this.selector || this.selector.length !== this.idTokens.length) {
-      throw new Error("selector is not properly initialized");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_NOT_INITIALIZED,
+        operation: "sign_user_op_hash",
+        message: "selector is not properly initialized",
+      });
     }
     // Only selector=true slots are actually used, so only those slots' idToken are required
     for (let i = 0; i < this.idTokens.length; i++) {
       if (this.selector && this.selector[i] === true && this.idTokens[i] === "") {
-        throw new Error(`idToken[${i}] is not initialized (selector=true slot requires a token)`);
+        throw new AaOperationError({
+          code: AaOperationErrorCode.SIGNER_NOT_INITIALIZED,
+          operation: "sign_user_op_hash",
+          message: `idToken[${i}] is not initialized (selector=true slot requires a token)`,
+        });
       }
     }
 
@@ -482,14 +662,22 @@ export class ZkOAuthSigner implements IUserOpSigner {
         } else if (service === "kakao") {
           return await getKakaoOAuthPublicKey(kids[index]);
         } else {
-          throw new Error("Invalid service");
+          throw new AaOperationError({
+            code: AaOperationErrorCode.SIGNER_UNSUPPORTED,
+            operation: "sign_user_op_hash",
+            message: "Invalid service",
+          });
         }
       })
     );
 
     /* istanbul ignore next */
     if (!this.poseidonMerkleTreeDirectory) {
-      throw new Error("poseidonMerkleTreeDirectory is not initialized");
+      throw new AaOperationError({
+        code: AaOperationErrorCode.SIGNER_NOT_INITIALIZED,
+        operation: "sign_user_op_hash",
+        message: "poseidonMerkleTreeDirectory is not initialized",
+      });
     }
     const merkleTreeDir = this.poseidonMerkleTreeDirectory;
     const results = await Promise.all(
@@ -515,7 +703,11 @@ export class ZkOAuthSigner implements IUserOpSigner {
         const leafIndexNum = Number(leafIndex);
         /* istanbul ignore next */
         if (!Number.isSafeInteger(leafIndexNum)) {
-          throw new Error(`leafIndex ${leafIndex} exceeds safe integer range`);
+          throw new AaOperationError({
+            code: AaOperationErrorCode.INPUT_OUT_OF_RANGE,
+            operation: "sign_user_op_hash",
+            message: `leafIndex ${leafIndex} exceeds safe integer range`,
+          });
         }
         return { leafIndex: leafIndexNum, pathUint };
       })

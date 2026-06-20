@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
 import type { UserOperation, PackedUserOperation, PimlicoUserOperation } from "../types/UserOperation";
+import { AaOperationError, AaOperationErrorCode } from "../errors";
 
 // ---------------------------------------------------------------------------
 // Pack / Unpack UserOperation
@@ -137,9 +138,11 @@ export function toPimlicoFormat(packed: PackedUserOperation): PimlicoUserOperati
   const initCode = unpacked.initCode;
   if (initCode && initCode !== "0x") {
     if (initCode.length < 42) {
-      throw new Error(
-        `Invalid initCode: expected at least 20-byte address (42 hex chars with 0x prefix), got ${initCode.length} chars`
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.INPUT_INVALID_FORMAT,
+        operation: "to_pimlico_format",
+        message: `Invalid initCode: expected at least 20-byte address (42 hex chars with 0x prefix), got ${initCode.length} chars`,
+      });
     }
     factory = "0x" + initCode.slice(2, 42);
     factoryData = initCode.length > 42 ? "0x" + initCode.slice(42) : "0x";
@@ -152,9 +155,11 @@ export function toPimlicoFormat(packed: PackedUserOperation): PimlicoUserOperati
     unpacked.paymaster !== "0x" &&
     unpacked.paymaster.toLowerCase() !== ethers.ZeroAddress;
   if (hasPaymaster && paymasterHex.length < 104) {
-    throw new Error(
-      `Invalid paymasterAndData: has paymaster address but missing gas fields (expected ≥104 hex chars, got ${paymasterHex.length})`
-    );
+    throw new AaOperationError({
+      code: AaOperationErrorCode.INPUT_INVALID_FORMAT,
+      operation: "to_pimlico_format",
+      message: `Invalid paymasterAndData: has paymaster address but missing gas fields (expected ≥104 hex chars, got ${paymasterHex.length})`,
+    });
   }
 
   const result: PimlicoUserOperation = {

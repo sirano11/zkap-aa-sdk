@@ -18,6 +18,7 @@
 
 import { PRESETS } from "./presets";
 import type { ProviderPreset } from "./presets";
+import { AaOperationError, AaOperationErrorCode } from "../errors";
 
 export type SocialProvider = "GOOGLE" | "KAKAO" | "APPLE";
 
@@ -50,9 +51,11 @@ export class ZkapProviderConfig {
   static fromPreset(preset: ProviderPreset = "embedded-zkap"): ZkapProviderConfig {
     const data = PRESETS[preset];
     if (!data) {
-      throw new Error(
-        `Unknown preset: ${preset}. Available: ${Object.keys(PRESETS).join(", ")}`
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.CONFIG_UNSUPPORTED,
+        operation: "from_preset",
+        message: `Unknown preset: ${preset}. Available: ${Object.keys(PRESETS).join(", ")}`,
+      });
     }
     return new ZkapProviderConfig(data);
   }
@@ -68,7 +71,11 @@ export class ZkapProviderConfig {
   getClientId(provider: SocialProvider): string {
     const entry = this.getProviderEntry(provider);
     if (!entry.clientId) {
-      throw new Error(`Provider ${provider} has no clientId configured in this preset`);
+      throw new AaOperationError({
+        code: AaOperationErrorCode.CONFIG_REQUIRED_FIELD_MISSING,
+        operation: "get_client_id",
+        message: `Provider ${provider} has no clientId configured in this preset`,
+      });
     }
     return entry.clientId;
   }
@@ -92,9 +99,11 @@ export class ZkapProviderConfig {
   getProviderEntry(provider: SocialProvider): ProviderEntry {
     const entry = this.config.providers[provider];
     if (!entry) {
-      throw new Error(
-        `Unknown provider: ${provider}. Available: ${Object.keys(this.config.providers).join(", ")}`
-      );
+      throw new AaOperationError({
+        code: AaOperationErrorCode.CONFIG_UNSUPPORTED,
+        operation: "get_provider_entry",
+        message: `Unknown provider: ${provider}. Available: ${Object.keys(this.config.providers).join(", ")}`,
+      });
     }
     return entry;
   }
